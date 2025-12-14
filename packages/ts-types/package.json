@@ -1,0 +1,11 @@
+{
+    "name": "@investidubh/ts-types",
+    "version": "0.1.0",
+    "main": "index.ts",
+    "dependencies": {
+        "zod": "^3.22.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.2.0"
+    }
+}

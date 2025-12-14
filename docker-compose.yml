@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # --- Infrastructure ---
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-investidubh}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+      POSTGRES_DB: investidubh_core
+    volumes:
+      - ./storage/postgres_data:/var/lib/postgresql/data
+      - ./storage/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - internal-net
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-password}
+    volumes:
+      - ./storage/minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - internal-net
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - ./storage/redis_data:/data
+    networks:
+      - internal-net
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.3
+    environment:
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-masterKey}
+    ports:
+      - "7700:7700"
+    volumes:
+      - ./storage/meili_data:/meili_data
+    networks:
+      - internal-net
+
+  # --- Application Services ---
+  gateway:
+    build:
+      context: .
+      dockerfile: backend/gateway/Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - DATABASE_URL=postgres://${DB_USER:-investidubh}:${DB_PASSWORD:-secret}@postgres:5432/investidubh_core
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT_HOST=minio
+      - MINIO_ENDPOINT_PORT=9000
+      - MINIO_ROOT_USER=${MINIO_USER:-admin}
+      - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD:-password}
+      - JWT_SECRET=${JWT_SECRET:-super-secret-dev-key}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - internal-net
+      - public-net
+
+  collector:
+    build: ./backend/collector
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-investidubh}:${DB_PASSWORD:-secret}@postgres:5432/investidubh_core
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ROOT_USER=${MINIO_USER:-admin}
+      - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD:-password}
+      - PROXY_ENABLED=true
+      - PROXY_HOST=tor
+      - PROXY_PORT=9050
+      - TOR_CONTROL_HOST=tor
+      - TOR_CONTROL_PORT=9051
+    depends_on:
+      - redis
+      - minio
+      - tor
+    networks:
+      - internal-net
+      - tor-net
+
+  tor:
+    image: osminogin/tor-simple:latest
+    environment:
+      - TOR_Log=notice
+    ports:
+      - "9050:9050"
+      - "9051:9051"
+    networks:
+      - tor-net
+
+  analysis:
+    build: ./backend/analysis
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-investidubh}:${DB_PASSWORD:-secret}@postgres:5432/investidubh_core
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ROOT_USER=${MINIO_USER:-admin}
+      - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD:-password}
+    depends_on:
+      - redis
+      - minio
+      - postgres
+    networks:
+      - internal-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - API_URL=http://gateway:4000
+      - NEXT_PUBLIC_API_URL=http://localhost:4000 # Browser access
+    depends_on:
+      - gateway
+    networks:
+      - public-net
+
+networks:
+  public-net:
+  internal-net:
+  tor-net:

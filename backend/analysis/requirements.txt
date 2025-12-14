@@ -1,0 +1,16 @@
+spacy
+beautifulsoup4
+textblob
+networkx
+nltk
+langchain
+requests
+redis
+minio
+psycopg[binary]
+beautifulsoup4
+minio
+numpy
+pandas
+meilisearch
+dnspython

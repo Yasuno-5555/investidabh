@@ -1,0 +1,12 @@
+node_modules
+.pnpm-debug.log
+.env
+dist
+build
+.next
+__pycache__
+*.pyc
+.venv
+venv
+.DS_Store
+coverage
