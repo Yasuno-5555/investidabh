@@ -1,45 +1,70 @@
 import asyncio
 import logging
 
-logger = logging.getLogger("collector.tor")
+logger = logging.getLogger(__name__)
 
-async def renew_tor_identity(control_host='tor', control_port=9051):
+async def renew_tor_identity(
+    control_host: str = 'tor',
+    control_port: int = 9051,
+    auth_password: str | None = None,
+    timeout: float = 15.0
+) -> bool:
     """
     Signal Tor to switch identity (NEWNYM) via Control Port.
     """
     try:
-        reader, writer = await asyncio.open_connection(control_host, control_port)
-        
-        # Authenticate (assumes no password set for internal usage)
-        writer.write(b'AUTHENTICATE ""\r\n')
-        await writer.drain()
-        
-        response = await reader.read(1024)
-        if b'250 OK' not in response:
-            logger.error(f"Tor Auth failed: {response}")
+        # Establish connection with timeout
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(control_host, control_port),
+            timeout=timeout
+        )
+
+        async def send_command(cmd: str) -> str | None:
+            writer.write(f"{cmd}\r\n".encode())
+            await writer.drain()
+            
+            # Read response properly (handling multi-line)
+            lines = []
+            while True:
+                line = await reader.readline()
+                if not line:
+                    return None
+                line = line.decode().rstrip()
+                lines.append(line)
+                if line.startswith("250 "):  # Final line starts with 250
+                    break
+            return "\n".join(lines)
+
+        # 1. AUTHENTICATE
+        auth_cmd = 'AUTHENTICATE' + (f' "{auth_password}"' if auth_password else ' ""')
+        response = await send_command(auth_cmd)
+        if response is None or "250 OK" not in response:
+            logger.error(f"Tor authentication failed: {response}")
             writer.close()
             await writer.wait_closed()
             return False
 
-        # Send NEWNYM signal
-        writer.write(b'SIGNAL NEWNYM\r\n')
-        await writer.drain()
-        
-        response = await reader.read(1024)
-        if b'250 OK' not in response:
-            logger.error(f"Tor Signal failed: {response}")
+        # 2. SIGNAL NEWNYM
+        response = await send_command("SIGNAL NEWNYM")
+        if response is None or "250 OK" not in response:
+            logger.error(f"Tor NEWNYM signal failed: {response}")
             writer.close()
             await writer.wait_closed()
             return False
-            
-        logger.info("[*] Tor identity rotation signal sent. Waiting 5s...")
+
+        logger.info("[*] Tor NEWNYM signal sent successfully.")
+
         writer.close()
         await writer.wait_closed()
-        
-        # Wait for the circuit to be built
-        await asyncio.sleep(5)
+
+        # Wait for circuit to stabilize (env dependent)
+        await asyncio.sleep(10)
+
         return True
 
+    except asyncio.TimeoutError:
+        logger.error("Tor control connection timed out")
+        return False
     except Exception as e:
-        logger.error(f"Tor rotation failed: {e}")
+        logger.error(f"Tor identity rotation failed: {e}")
         return False

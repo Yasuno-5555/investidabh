@@ -3,3 +3,7 @@ asyncio
 playwright
 minio
 psycopg[binary]
+feedparser
+Mastodon.py
+PyGithub
+requests

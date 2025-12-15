@@ -174,14 +174,78 @@ export default function GraphPage() {
                     <MiniMap className="border rounded shadow-lg" />
 
                     {/* Top Right Controls */}
-                    <Panel position="top-right" className="flex gap-2">
-                        <button
-                            onClick={() => fetchData()}
-                            className="bg-white/90 backdrop-blur border text-slate-700 px-4 py-2 rounded-lg shadow-sm hover:bg-white hover:text-blue-600 transition-all font-semibold text-sm flex items-center gap-2"
-                        >
-                            {loading && <Spinner className="w-4 h-4" />}
-                            {loading ? 'Refreshing...' : 'Refresh Graph'}
-                        </button>
+                    <Panel position="top-right" className="flex flex-col gap-2 max-w-xs">
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => fetchData()}
+                                className="bg-white/90 backdrop-blur border text-slate-700 px-4 py-2 rounded-lg shadow-sm hover:bg-white hover:text-blue-600 transition-all font-semibold text-sm flex items-center gap-2"
+                            >
+                                {loading && <Spinner className="w-4 h-4" />}
+                                {loading ? 'Refreshing...' : 'Refresh'}
+                            </button>
+
+                            {/* Phase 30: Export PDF Button */}
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        // Simple export without html2canvas for now
+                                        const token = localStorage.getItem('token');
+                                        const response = await axios.post(
+                                            `${process.env.NEXT_PUBLIC_API_URL}/api/report/generate`,
+                                            { investigation_id: 'all', graph_image: null },
+                                            {
+                                                headers: { Authorization: `Bearer ${token}` },
+                                                responseType: 'blob'
+                                            }
+                                        );
+
+                                        const url = window.URL.createObjectURL(new Blob([response.data]));
+                                        const link = document.createElement('a');
+                                        link.href = url;
+                                        link.setAttribute('download', `investidubh-report-${Date.now()}.pdf`);
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        link.remove();
+                                    } catch (err) {
+                                        alert('PDF export failed. Please try again.');
+                                    }
+                                }}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-sm hover:bg-blue-700 transition-all font-semibold text-sm flex items-center gap-2"
+                            >
+                                📄 Export PDF
+                            </button>
+                        </div>
+
+                        {/* Phase 29: Insights Panel */}
+                        {(initialNodes as any)?.insights && (
+                            <div className="bg-white/90 backdrop-blur rounded-xl shadow-lg border border-white/50 p-3 text-xs">
+                                {/* Top Entities */}
+                                {(initialNodes as any).insights.top_entities?.length > 0 && (
+                                    <div className="mb-3">
+                                        <span className="font-bold text-slate-500 uppercase tracking-wide block mb-2">🔑 Key Entities</span>
+                                        {(initialNodes as any).insights.top_entities.slice(0, 3).map((e: any, i: number) => (
+                                            <div key={i} className="flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
+                                                <span className="font-medium text-slate-700 truncate max-w-[140px]">{e.label}</span>
+                                                <span className="text-yellow-600 font-bold">{e.priority}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* Anomalies */}
+                                {(initialNodes as any).insights.anomalies?.length > 0 && (
+                                    <div>
+                                        <span className="font-bold text-red-500 uppercase tracking-wide block mb-2">⚠️ Anomalies</span>
+                                        {(initialNodes as any).insights.anomalies.slice(0, 3).map((a: any, i: number) => (
+                                            <div key={i} className="flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
+                                                <span className="font-medium text-slate-700 truncate max-w-[140px]">{a.label}</span>
+                                                <span className="text-red-600 font-bold">{a.spike_ratio}x</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </Panel>
 
                     {/* Detail Panel */}
@@ -204,13 +268,44 @@ export default function GraphPage() {
                                             </span>
                                         </div>
                                         <div className="flex-1 text-right">
-                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">Score</span>
-                                            <span className={`text-xl font-black ${selectedNode.data.score > 50 ? 'text-red-500' : 'text-slate-700'}`}>
-                                                {selectedNode.data.score ? selectedNode.data.score.toFixed(0) : 0}
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">Priority</span>
+                                            <span className={`text-2xl font-black ${selectedNode.data.priority?.score >= 75 ? 'text-red-500' :
+                                                selectedNode.data.priority?.score >= 50 ? 'text-orange-500' : 'text-slate-700'
+                                                }`}>
+                                                {selectedNode.data.priority?.score || selectedNode.data.score || 0}
                                             </span>
                                             <span className="text-xs text-slate-400">/100</span>
                                         </div>
                                     </div>
+
+                                    {/* Priority Score Breakdown */}
+                                    {selectedNode.data.priority?.breakdown && (
+                                        <div className="mt-4 pt-4 border-t border-slate-100">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Score Breakdown</span>
+                                            <div className="space-y-2">
+                                                {[
+                                                    { key: 'degree', label: 'Degree', color: 'bg-blue-500' },
+                                                    { key: 'frequency', label: 'Frequency', color: 'bg-green-500' },
+                                                    { key: 'cross_investigation', label: 'Cross-Inv', color: 'bg-purple-500' },
+                                                    { key: 'sentiment', label: 'Sentiment', color: 'bg-red-500' },
+                                                    { key: 'freshness', label: 'Freshness', color: 'bg-cyan-500' }
+                                                ].map(item => (
+                                                    <div key={item.key} className="flex items-center gap-2 text-xs">
+                                                        <span className="w-20 text-slate-500">{item.label}</span>
+                                                        <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                            <div
+                                                                className={`h-full ${item.color}`}
+                                                                style={{ width: `${selectedNode.data.priority.breakdown[item.key]}%` }}
+                                                            />
+                                                        </div>
+                                                        <span className="w-8 text-right font-mono text-slate-600">
+                                                            {selectedNode.data.priority.breakdown[item.key]}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
 
                                     <div className="grid grid-cols-2 gap-4 text-sm">
                                         <div>
@@ -221,15 +316,45 @@ export default function GraphPage() {
                                         </div>
                                         <div>
                                             <span className="text-xs text-slate-400 block mb-1">CONNECTIONS</span>
-                                            <span className="font-mono font-medium text-slate-700">{selectedNode.data.degree}</span>
+                                            <span className="font-mono font-medium text-slate-700">{selectedNode.data.degree || selectedNode.data.stats?.frequency}</span>
                                         </div>
+
+                                        {/* Phase 26: Temporal Intelligence */}
+                                        {selectedNode.data.stats && (
+                                            <>
+                                                <div className="col-span-2 pt-2 border-t border-slate-100">
+                                                    <span className="text-xs text-slate-400 block mb-1">LIFESPAN</span>
+                                                    <span className="text-slate-700 text-sm">
+                                                        {new Date(selectedNode.data.stats.first_seen).toLocaleDateString()}
+                                                        {' ~ '}
+                                                        {new Date(selectedNode.data.stats.last_seen).toLocaleDateString()}
+                                                    </span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-xs text-slate-400 block mb-1">SIGHTINGS</span>
+                                                    <span className="text-xl font-black text-slate-700">{selectedNode.data.stats.frequency}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-xs text-slate-400 block mb-1">FRESHNESS</span>
+                                                    <span className={`inline-block px-2 py-1 rounded text-xs font-bold 
+                                                        ${selectedNode.data.stats.aging_category === 'FRESH' ? 'bg-green-100 text-green-700' :
+                                                            selectedNode.data.stats.aging_category === 'RECENT' ? 'bg-blue-100 text-blue-700' :
+                                                                selectedNode.data.stats.aging_category === 'STALE' ? 'bg-yellow-100 text-yellow-700' :
+                                                                    'bg-slate-200 text-slate-500'}`}>
+                                                        {selectedNode.data.stats.aging_category}
+                                                    </span>
+                                                </div>
+                                            </>
+                                        )}
+
                                         <div className="col-span-2">
                                             <span className="text-xs text-slate-400 block mb-1">FIRST SEEN</span>
                                             <span className="text-slate-700">{formatDate(selectedNode.data.timestamp)}</span>
                                         </div>
                                     </div>
 
-                                    {selectedNode.data.isGhost && (
+                                    {/* Ghost Entity based on ANCIENT */}
+                                    {selectedNode.data.stats?.aging_category === 'ANCIENT' && (
                                         <div className="mt-4 bg-orange-50 border border-orange-100 rounded-lg p-3 flex gap-3 text-sm text-orange-800">
                                             <span className="text-lg">👻</span>
                                             <div>
@@ -246,11 +371,11 @@ export default function GraphPage() {
                                     )}
 
                                     {/* Advanced NLP: Relations */}
-                                    {selectedNode.data.relations && selectedNode.data.relations.length > 0 && (
+                                    {(selectedNode.data.relations?.length > 0 || selectedNode.data.metadata?.relations?.length > 0) && (
                                         <div className="mt-4">
-                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Parameters & Relations</span>
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Relations</span>
                                             <div className="space-y-2">
-                                                {selectedNode.data.relations.map((rel: any, idx: number) => (
+                                                {(selectedNode.data.relations || selectedNode.data.metadata?.relations || []).map((rel: any, idx: number) => (
                                                     <div key={idx} className="flex items-center gap-2 text-sm bg-slate-50 p-2 rounded border border-slate-100">
                                                         <span className="font-bold text-blue-600">{rel.label}</span>
                                                         <span className="text-slate-400">&rarr;</span>
@@ -274,6 +399,65 @@ export default function GraphPage() {
                                             <span className="text-xs font-mono font-bold text-slate-600">
                                                 {(selectedNode.data.sentiment || 0).toFixed(2)}
                                             </span>
+                                        </div>
+                                    </div>
+
+                                    {/* --- Phase 28: Analyst Tools --- */}
+                                    <div className="mt-4 pt-4 border-t border-slate-100">
+                                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Analyst Tools</span>
+
+                                        {/* Pin Toggle */}
+                                        <div className="flex items-center justify-between mb-3">
+                                            <span className="text-sm text-slate-600">Pin Node</span>
+                                            <button
+                                                onClick={() => {
+                                                    const isPinned = !selectedNode.data.metadata?.pinned;
+                                                    // API call would go here
+                                                    alert(`Node ${isPinned ? 'pinned' : 'unpinned'}. (API connection pending)`);
+                                                }}
+                                                className={`px-3 py-1 rounded text-xs font-bold transition-all ${selectedNode.data.metadata?.pinned
+                                                    ? 'bg-yellow-100 text-yellow-700 border border-yellow-300'
+                                                    : 'bg-slate-100 text-slate-500'
+                                                    }`}
+                                            >
+                                                {selectedNode.data.metadata?.pinned ? '📌 Pinned' : 'Pin'}
+                                            </button>
+                                        </div>
+
+                                        {/* Tags */}
+                                        <div className="mb-3">
+                                            <span className="text-xs text-slate-400 block mb-2">Tags</span>
+                                            <div className="flex flex-wrap gap-1 mb-2">
+                                                {(selectedNode.data.metadata?.tags || []).map((tag: string, idx: number) => (
+                                                    <span key={idx} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                                                        {tag}
+                                                        <button className="ml-1 text-blue-400 hover:text-blue-600">&times;</button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                            <div className="flex gap-1">
+                                                <select className="flex-1 text-xs border rounded px-2 py-1 bg-white">
+                                                    <option value="">Add tag...</option>
+                                                    <option value="watchlist">Watchlist</option>
+                                                    <option value="confirmed">Confirmed</option>
+                                                    <option value="ignore">Ignore</option>
+                                                    <option value="reviewed">Reviewed</option>
+                                                </select>
+                                                <button className="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600">+</button>
+                                            </div>
+                                        </div>
+
+                                        {/* Notes */}
+                                        <div>
+                                            <span className="text-xs text-slate-400 block mb-2">Notes</span>
+                                            <textarea
+                                                className="w-full text-sm border rounded p-2 h-20 resize-none"
+                                                placeholder="Add analyst notes..."
+                                                defaultValue={selectedNode.data.metadata?.notes || ''}
+                                            />
+                                            <button className="mt-2 w-full px-3 py-1.5 bg-slate-700 text-white text-xs rounded hover:bg-slate-800 font-medium">
+                                                Save Notes
+                                            </button>
                                         </div>
                                     </div>
                                 </div>

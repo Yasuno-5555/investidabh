@@ -55,7 +55,6 @@ export default function InvestigationDetail() {
 
     return (
         <div className="max-w-6xl mx-auto p-8">
-        </div>
             
             {/* Export & Status */ }
     <div className="flex gap-4 items-center">
@@ -146,6 +145,7 @@ export default function InvestigationDetail() {
                             <tr>
                                 <th className="px-6 py-3">Type</th>
                                 <th className="px-6 py-3">Value</th>
+                                <th className="px-6 py-3">Source</th>
                                 <th className="px-6 py-3">Confidence</th>
                             </tr>
                         </thead>
@@ -154,7 +154,18 @@ export default function InvestigationDetail() {
                                 <tr key={item.id} className="hover:bg-gray-50">
                                     <td className="px-6 py-4 text-sm font-medium text-gray-900">{item.type}</td>
                                     <td className="px-6 py-4 text-sm text-gray-500 font-mono select-all">{item.value}</td>
-                                    <td className="px-6 py-4 text-sm text-gray-500">{item.confidence}</td>
+                                    <td className="px-6 py-4 text-sm text-gray-500">
+                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium 
+                                            ${item.source_type === 'manual' ? 'bg-gray-100 text-gray-800' :
+                                                item.source_type === 'rss' ? 'bg-green-100 text-green-800' :
+                                                    item.source_type === 'sns' || item.source_type === 'mastodon' ? 'bg-pink-100 text-pink-800' :
+                                                        item.source_type === 'git' || item.source_type === 'github' ? 'bg-purple-100 text-purple-800' :
+                                                            item.source_type === 'infra' ? 'bg-blue-100 text-blue-800' :
+                                                                'bg-yellow-100 text-yellow-800'}`}>
+                                            {item.source_type || 'manual'}
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-sm text-gray-500">{item.confidence || item.confidence_score}</td>
                                 </tr>
                             ))}
                         </tbody>
