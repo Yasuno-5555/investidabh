@@ -2,6 +2,7 @@ from github import Github
 import os
 import datetime
 import logging
+import asyncio
 
 logger = logging.getLogger("git-collector")
 
@@ -20,21 +21,29 @@ class GitCollector:
         
         try:
             # Simple User Search
-            users = self.g.search_users(query)
-            # Limit to top 5 to avoid API limits on free tier
-            for user in users[:5]:
-                user_data = {
-                    "login": user.login,
-                    "name": user.name,
-                    "company": user.company,
-                    "blog": user.blog,
-                    "location": user.location,
-                    "email": user.email, # Public email only
-                    "bio": user.bio,
-                    "public_repos": user.public_repos,
-                    "url": user.html_url
-                }
-                results.append(user_data)
+            # Offload blocking PyGithub search
+            loop = asyncio.get_running_loop()
+            
+            def search_gh_users():
+                users = self.g.search_users(query)
+                # Iterating over PaginatedList is blocking and lazy
+                top_users = []
+                for user in users[:5]:
+                    top_users.append({
+                        "login": user.login,
+                        "name": user.name,
+                        "company": user.company,
+                        "blog": user.blog,
+                        "location": user.location,
+                        "email": user.email, 
+                        "bio": user.bio,
+                        "public_repos": user.public_repos,
+                        "url": user.html_url
+                    })
+                return top_users
+            
+            user_data_list = await loop.run_in_executor(None, search_gh_users)
+            results.extend(user_data_list)
                 
         except Exception as e:
             logger.error(f"GitHub search error: {e}")

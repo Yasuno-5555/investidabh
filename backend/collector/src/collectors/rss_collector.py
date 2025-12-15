@@ -1,6 +1,7 @@
 import feedparser
 import datetime
 import logging
+import asyncio
 
 logger = logging.getLogger("rss-collector")
 
@@ -11,22 +12,14 @@ class RSSCollector:
     async def collect(self, url: str) -> dict:
         """
         Fetches an RSS feed and returns structured data.
-        
-        Args:
-            url: The RSS feed URL.
-            
-        Returns:
-            dict: {
-                "source_type": "rss",
-                "source_url": url,
-                "timestamp": datetime.datetime.now().isoformat(),
-                "data": [list of items]
-            }
         """
         logger.info(f"Fetching RSS feed: {url}")
-        # feedparser is synchronous, might block event loop if not careful.
-        # Ideally run in executor, but for now direct call is okay for MVP or use asyncio.to_thread if needed.
-        feed = feedparser.parse(url)
+        
+        loop = asyncio.get_running_loop()
+        
+        # Offload blocking feedparser
+        # feedparser.parse can take a URL or string. If URL, it does network I/O blocking.
+        feed = await loop.run_in_executor(None, feedparser.parse, url)
         
         items = []
         for entry in feed.entries:

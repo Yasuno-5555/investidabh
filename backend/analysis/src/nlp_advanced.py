@@ -3,6 +3,7 @@ from textblob import TextBlob
 import logging
 import json
 import networkx as nx
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +27,8 @@ class AdvancedNLP:
         1. Entities (NER)
         2. Sentiment Score (TextBlob)
         3. Relations (Heuristic)
+        
+        This is the synchronous, CPU-bound implementation.
         """
         doc = self.nlp(text)
         blob = TextBlob(text)
@@ -101,28 +104,49 @@ class AdvancedNLP:
 
         return list(unique_entities.values())
 
+    async def analyze_text_async(self, text):
+        """
+        Non-blocking wrapper for analyze_text.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.analyze_text, text)
+
     async def save_results(self, investigation_id, results, conn):
         """
         Saves extracted intelligence to the database including Advanced NLP fields.
+        Optimized with executemany.
         """
         try:
             async with conn.cursor() as cur:
+                # Prepare batch data
+                params_list = []
                 for item in results:
                     # JSON serialization for metadata
                     metadata = json.dumps({"relations": item["relations"]})
                     
-                    await cur.execute(
+                    params_list.append((
+                        investigation_id, 
+                        item["type"], 
+                        item["value"], 
+                        item["confidence"], 
+                        item["sentiment"], 
+                        metadata
+                    ))
+
+                if params_list:
+                    # Using ON CONFLICT with executemany is valid.
+                    await cur.executemany(
                         """
-                        INSERT INTO intelligence (investigation_id, type, value, confidence, sentiment_score, metadata)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (investigation_id, type, value) 
+                        INSERT INTO intelligence (investigation_id, entity_type, value, confidence_score, sentiment_score, metadata)
+                        VALUES (%s, %s::entity_type_enum, %s, %s, %s, %s)
+                        ON CONFLICT (investigation_id, entity_type, value) 
                         DO UPDATE SET 
-                            confidence = EXCLUDED.confidence,
+                            confidence_score = EXCLUDED.confidence_score,
                             sentiment_score = EXCLUDED.sentiment_score,
                             metadata = EXCLUDED.metadata,
                             updated_at = NOW()
                         """,
-                        (investigation_id, item["type"], item["value"], item["confidence"], item["sentiment"], metadata)
+                        params_list
                     )
             await conn.commit()
             logger.info(f"Saved {len(results)} advanced intelligence items.")

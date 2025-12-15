@@ -14,5 +14,6 @@ numpy
 pandas
 meilisearch
 dnspython
+python-whois
 weasyprint
 jinja2

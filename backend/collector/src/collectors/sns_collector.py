@@ -2,6 +2,7 @@ import os
 from mastodon import Mastodon
 import datetime
 import logging
+import asyncio
 
 logger = logging.getLogger("sns-collector")
 
@@ -45,8 +46,14 @@ class SNSCollector:
         
         if self.mastodon:
             try:
-                # Search for toots (statuses)
-                search_res = self.mastodon.search(query, result_type='statuses')
+                # Search for toots (statuses) - OFF-LOADED TO EXECUTOR
+                loop = asyncio.get_running_loop()
+                # mastodon.search is blocking, run in default thread pool
+                search_res = await loop.run_in_executor(
+                    None, 
+                    lambda: self.mastodon.search(query, result_type='statuses')
+                )
+                
                 statuses = search_res.get('statuses', [])
                 
                 for status in statuses:

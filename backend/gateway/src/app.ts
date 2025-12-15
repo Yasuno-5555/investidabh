@@ -631,364 +631,415 @@ export function buildApp(): FastifyInstance {
     app.get('/api/graph', {
         onRequest: [app.authenticate]
     }, async (request, reply) => {
+        // ... (existing code, keeping previous block start) ...
         const user = request.user as { id: string };
+        // ...
 
-        try {
-            // Fetch investigations (Strict Owner)
-            const invRows = await pool.query(
-                "SELECT id, target_url FROM investigations WHERE user_id = $1",
-                [user.id]
-            );
+        // --- [Phase 32] Real-time Alerts Stream (SSE) ---
+        app.get('/api/alerts/stream', {
+            onRequest: [app.authenticate]
+        }, (request, reply) => {
+            // Manual SSE Headers
+            reply.raw.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*' // Adjust for prod
+            });
 
-            // Fetch intelligence (Strict Owner via JOIN)
-            const intelRows = await pool.query(`
+            // Send initial heartbeat
+            reply.raw.write(`data: ${JSON.stringify({ type: 'HEARTBEAT', time: Date.now() })}\n\n`);
+
+            // Create dedicated Redis subscriber for this connection or reuse global? 
+            // Better to have one global subscriber for the app and fan-out, but for simplicity here we can reuse or make new.
+            // Actually, 'redis' instance is for commands. We need a subscriber instance.
+            // We can reuse the one from `buildApp` if we separate them, but standard redis client in 'ioredis' can't be both SUB and CMD.
+            // So we create a new one.
+            const sub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+            sub.subscribe('alerts', (err) => {
+                if (err) {
+                    request.log.error(`Failed to subscribe: ${err.message}`);
+                    return;
+                }
+            });
+
+            sub.on('message', (channel, message) => {
+                if (channel === 'alerts') {
+                    // Forward to client
+                    reply.raw.write(`data: ${message}\n\n`);
+                }
+            });
+
+            // Cleanup on close
+            request.raw.on('close', () => {
+                sub.disconnect();
+            });
+        });
+
+        app.get('/api/graph', {
+            onRequest: [app.authenticate]
+        }, async (request, reply) => {
+            const user = request.user as { id: string };
+
+            try {
+                // Fetch investigations (Strict Owner)
+                const invRows = await pool.query(
+                    "SELECT id, target_url FROM investigations WHERE user_id = $1",
+                    [user.id]
+                );
+
+                // Fetch intelligence (Strict Owner via JOIN)
+                const intelRows = await pool.query(`
                 SELECT i.id, i.investigation_id, i.type, i.value, i.normalized_value, i.created_at, i.confidence, i.score, i.sentiment_score, i.metadata, i.source_type
                 FROM intelligence i
                 JOIN investigations inv ON i.investigation_id = inv.id
                 WHERE inv.user_id = $1 AND i.normalized_value IS NOT NULL
+                ORDER BY i.created_at DESC
+                LIMIT 2000
             `, [user.id]);
 
-            const nodes: any[] = [];
-            const edges: any[] = [];
+                const nodes: any[] = [];
+                const edges: any[] = [];
 
-            // Aggregate stats per entity
-            interface EntityStats {
-                type: string;
-                value: string;
-                normalized_value: string;
-                first_seen: Date;
-                last_seen: Date;
-                frequency: number;
-                sources: Set<string>;
-                investigation_ids: Set<string>;
-                metadata: any;
-            }
-
-            const entityStats = new Map<string, EntityStats>();
-
-            intelRows.rows.forEach((item: any) => {
-                const entId = `ent-${item.type}-${item.normalized_value}`;
-
-                const currentDate = new Date(item.created_at || Date.now());
-
-                if (!entityStats.has(entId)) {
-                    entityStats.set(entId, {
-                        type: item.type,
-                        value: item.value,
-                        normalized_value: item.normalized_value,
-                        first_seen: currentDate,
-                        last_seen: currentDate,
-                        frequency: 0,
-                        sources: new Set<string>(),
-                        investigation_ids: new Set<string>(),
-                        metadata: item.metadata || {}
-                    });
+                // Aggregate stats per entity
+                interface EntityStats {
+                    type: string;
+                    value: string;
+                    normalized_value: string;
+                    first_seen: Date;
+                    last_seen: Date;
+                    frequency: number;
+                    sources: Set<string>;
+                    investigation_ids: Set<string>;
+                    metadata: any;
                 }
 
-                const stats = entityStats.get(entId)!;
-                stats.frequency += 1;
-                stats.investigation_ids.add(item.investigation_id);
-                if (currentDate < stats.first_seen) stats.first_seen = currentDate;
-                if (currentDate > stats.last_seen) stats.last_seen = currentDate;
-                if (item.source_type) stats.sources.add(item.source_type);
+                const entityStats = new Map<string, EntityStats>();
 
-                // Merge metadata (simple shallow merge for relations)
-                if (item.metadata?.relations) {
-                    const existingrels = stats.metadata.relations || [];
-                    const newrels = item.metadata.relations;
-                    // simple concat, ideally dedup
-                    stats.metadata.relations = [...existingrels, ...newrels];
-                }
-            });
+                intelRows.rows.forEach((item: any) => {
+                    const entId = `ent-${item.type}-${item.normalized_value}`;
 
-            invRows.rows.forEach((inv: any) => {
-                nodes.push({
-                    id: `inv-${inv.id}`,
-                    type: 'input',
-                    data: { label: inv.target_url },
-                    position: { x: 0, y: 0 },
-                    style: { background: '#2563eb', color: 'white', border: 'none', width: 180, padding: 10, borderRadius: 5 }
-                });
-            });
+                    const currentDate = new Date(item.created_at || Date.now());
 
-            // Color Mapping
-            const colorMap: Record<string, string> = {
-                ip: '#8b5cf6', // Violet
-                domain: '#6366f1', // Indigo
-                subdomain: '#a5b4fc', // Light Indigo
-                organization: '#f97316', // Orange
-                person: '#14b8a6', // Teal
-                location: '#ec4899', // Pink
+                    if (!entityStats.has(entId)) {
+                        entityStats.set(entId, {
+                            type: item.type,
+                            value: item.value,
+                            normalized_value: item.normalized_value,
+                            first_seen: currentDate,
+                            last_seen: currentDate,
+                            frequency: 0,
+                            sources: new Set<string>(),
+                            investigation_ids: new Set<string>(),
+                            metadata: item.metadata || {}
+                        });
+                    }
 
-                // New Phase 24 Types
-                email: '#facc15', // Yellow
-                github_user: '#c084fc', // Purple
-                github_repo: '#64748b', // Blue Gray
-                mastodon_account: '#d946ef', // Fuchsia
-                hashtag: '#f472b6', // Pink
-                url: '#06b6d4', // Cyan
-                rss_article: '#84cc16', // Lime
-                company_product: '#fbbf24', // Amber
-                position_title: '#94a3b8', // Slate
-            };
+                    const stats = entityStats.get(entId)!;
+                    stats.frequency += 1;
+                    stats.investigation_ids.add(item.investigation_id);
+                    if (currentDate < stats.first_seen) stats.first_seen = currentDate;
+                    if (currentDate > stats.last_seen) stats.last_seen = currentDate;
+                    if (item.source_type) stats.sources.add(item.source_type);
 
-            const oneDayMs = 24 * 60 * 60 * 1000;
-            const nowTime = Date.now();
-
-            // Create Nodes from Aggregated Stats
-            entityStats.forEach((stats, entityId) => {
-                // Determine Aging Category
-                const diffDays = (nowTime - stats.last_seen.getTime()) / oneDayMs;
-                let agingCategory = 'ANCIENT';
-                if (diffDays <= 7) agingCategory = 'FRESH';
-                else if (diffDays <= 90) agingCategory = 'RECENT';
-                else if (diffDays <= 365) agingCategory = 'STALE';
-
-                // --- Phase 27: Priority Score 2.0 ---
-                const relationsCount = (stats.metadata?.relations?.length || 0);
-                const degree = relationsCount + stats.investigation_ids.size;
-                const degreeScore = Math.min(100, 10 + Math.log2(Math.max(1, degree)) * 20);
-
-                const freqScore = Math.min(100, stats.frequency * 3);
-
-                const crossInvScore = Math.min(100, (stats.investigation_ids.size - 1) * 50);
-
-                const sentiment = stats.metadata?.average_sentiment || 0;
-                const sentimentScore = Math.max(0, Math.min(100, 50 - sentiment * 50));
-
-                const freshnessMap: Record<string, number> = { 'FRESH': 100, 'RECENT': 70, 'STALE': 30, 'ANCIENT': 0 };
-                const freshnessScore = freshnessMap[agingCategory] || 0;
-
-                const priorityScore = Math.round(
-                    0.25 * degreeScore +
-                    0.20 * freqScore +
-                    0.25 * crossInvScore +
-                    0.15 * sentimentScore +
-                    0.15 * freshnessScore
-                );
-
-                // Priority-based styling
-                let priorityLevel = 'low';
-                let priorityBorder = '2px solid white';
-                let priorityGlow = 'none';
-
-                if (priorityScore >= 75) {
-                    priorityLevel = 'high';
-                    priorityBorder = '3px solid #ef4444';
-                    priorityGlow = '0 0 15px rgba(239, 68, 68, 0.6)';
-                } else if (priorityScore >= 50) {
-                    priorityLevel = 'medium';
-                    priorityBorder = '2px solid #f97316';
-                    priorityGlow = '0 0 8px rgba(249, 115, 22, 0.4)';
-                }
-
-                // Override for ANCIENT (reduce glow)
-                if (agingCategory === 'ANCIENT') {
-                    priorityBorder = '2px dashed #cbd5e1';
-                    priorityGlow = 'none';
-                }
-
-                let bgColor = colorMap[stats.type] || '#10b981';
-
-                // Edges
-                stats.investigation_ids.forEach((invId: string) => {
-                    edges.push({
-                        id: `e-${invId}-${entityId}`,
-                        source: `inv-${invId}`,
-                        target: entityId,
-                        animated: priorityScore >= 50,
-                        style: { stroke: priorityScore >= 75 ? '#ef4444' : '#94a3b8' }
-                    });
-                });
-
-                // Node Size based on priority and frequency
-                const baseSize = 50 + (stats.frequency * 3);
-                const size = priorityScore >= 75 ? Math.min(baseSize + 20, 140) : Math.min(baseSize, 120);
-                const isSubdomain = stats.type === 'subdomain';
-
-                nodes.push({
-                    id: entityId,
-                    data: {
-                        label: stats.value,
-                        type: stats.type,
-                        stats: {
-                            frequency: stats.frequency,
-                            first_seen: stats.first_seen.toISOString(),
-                            last_seen: stats.last_seen.toISOString(),
-                            aging_category: agingCategory,
-                            sources: Array.from(stats.sources)
-                        },
-                        priority: {
-                            score: priorityScore,
-                            level: priorityLevel,
-                            breakdown: {
-                                degree: Math.round(degreeScore),
-                                frequency: Math.round(freqScore),
-                                cross_investigation: Math.round(crossInvScore),
-                                sentiment: Math.round(sentimentScore),
-                                freshness: Math.round(freshnessScore)
-                            }
-                        },
-                        metadata: stats.metadata
-                    },
-                    position: { x: 0, y: 0 },
-                    style: {
-                        background: bgColor,
-                        color: 'white',
-                        width: size,
-                        height: size,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        textAlign: 'center',
-                        padding: 10,
-                        borderRadius: isSubdomain ? '4px' : '50%',
-                        border: priorityBorder,
-                        boxShadow: priorityGlow,
-                        opacity: agingCategory === 'ANCIENT' ? 0.4 : (agingCategory === 'STALE' ? 0.7 : 1),
-                        fontSize: isSubdomain ? 10 : 12,
-                        filter: agingCategory === 'ANCIENT' ? 'grayscale(100%)' : (agingCategory === 'STALE' ? 'saturate(50%)' : 'none'),
-                        zIndex: priorityScore >= 75 ? 100 : (priorityScore >= 50 ? 50 : 1)
+                    // Merge metadata (simple shallow merge for relations)
+                    if (item.metadata?.relations) {
+                        const existingrels = stats.metadata.relations || [];
+                        const newrels = item.metadata.relations;
+                        // simple concat, ideally dedup
+                        stats.metadata.relations = [...existingrels, ...newrels];
                     }
                 });
-            });
 
-            // --- Phase 29: Pattern Detection (Pseudo-AI) ---
-
-            // Calculate statistics for anomaly detection
-            const sevenDaysAgo = nowTime - (7 * oneDayMs);
-            const thirtyDaysAgo = nowTime - (30 * oneDayMs);
-
-            // Recalculate frequencies for pattern detection
-            const entityPatterns = new Map<string, {
-                freq7d: number;
-                freqMonthly: number;
-                priorityScore: number;
-                degree: number;
-                type: string;
-                label: string;
-            }>();
-
-            // Count recent activity per entity
-            intelRows.rows.forEach((item: any) => {
-                const entId = `ent-${item.type}-${item.normalized_value}`;
-                const itemDate = new Date(item.created_at || Date.now()).getTime();
-
-                if (!entityPatterns.has(entId)) {
-                    const stats = entityStats.get(entId);
-                    entityPatterns.set(entId, {
-                        freq7d: 0,
-                        freqMonthly: 0,
-                        priorityScore: 0,
-                        degree: stats ? stats.investigation_ids.size + (stats.metadata?.relations?.length || 0) : 0,
-                        type: item.type,
-                        label: item.value
+                invRows.rows.forEach((inv: any) => {
+                    nodes.push({
+                        id: `inv-${inv.id}`,
+                        type: 'input',
+                        data: { label: inv.target_url },
+                        position: { x: 0, y: 0 },
+                        style: { background: '#2563eb', color: 'white', border: 'none', width: 180, padding: 10, borderRadius: 5 }
                     });
-                }
+                });
 
-                const pattern = entityPatterns.get(entId)!;
-                if (itemDate >= sevenDaysAgo) pattern.freq7d++;
-                if (itemDate >= thirtyDaysAgo) pattern.freqMonthly++;
-            });
+                // Color Mapping
+                const colorMap: Record<string, string> = {
+                    ip: '#8b5cf6', // Violet
+                    domain: '#6366f1', // Indigo
+                    subdomain: '#a5b4fc', // Light Indigo
+                    organization: '#f97316', // Orange
+                    person: '#14b8a6', // Teal
+                    location: '#ec4899', // Pink
 
-            // Update priority scores from nodes
-            nodes.forEach(node => {
-                if (entityPatterns.has(node.id)) {
-                    entityPatterns.get(node.id)!.priorityScore = node.data.priority?.score || 0;
-                }
-            });
+                    // New Phase 24 Types
+                    email: '#facc15', // Yellow
+                    github_user: '#c084fc', // Purple
+                    github_repo: '#64748b', // Blue Gray
+                    mastodon_account: '#d946ef', // Fuchsia
+                    hashtag: '#f472b6', // Pink
+                    url: '#06b6d4', // Cyan
+                    rss_article: '#84cc16', // Lime
+                    company_product: '#fbbf24', // Amber
+                    position_title: '#94a3b8', // Slate
+                };
 
-            // 1. Anomaly Detection (Frequency Spike)
-            const anomalies: Array<{ label: string; type: string; spike_ratio: number; reason: string }> = [];
+                const oneDayMs = 24 * 60 * 60 * 1000;
+                const nowTime = Date.now();
 
-            entityPatterns.forEach((pattern, entityId) => {
-                const monthlyAvg = pattern.freqMonthly / 4; // Approx weekly average from monthly
+                // Create Nodes from Aggregated Stats
+                entityStats.forEach((stats, entityId) => {
+                    // Determine Aging Category
+                    const diffDays = (nowTime - stats.last_seen.getTime()) / oneDayMs;
+                    let agingCategory = 'ANCIENT';
+                    if (diffDays <= 7) agingCategory = 'FRESH';
+                    else if (diffDays <= 90) agingCategory = 'RECENT';
+                    else if (diffDays <= 365) agingCategory = 'STALE';
 
-                if (monthlyAvg === 0 && pattern.freq7d > 2) {
-                    // New entity with significant activity
-                    anomalies.push({
-                        label: pattern.label,
-                        type: pattern.type,
-                        spike_ratio: pattern.freq7d,
-                        reason: `New entity with ${pattern.freq7d} sightings this week`
+                    // --- Phase 27: Priority Score 2.0 ---
+                    const relationsCount = (stats.metadata?.relations?.length || 0);
+                    const degree = relationsCount + stats.investigation_ids.size;
+                    const degreeScore = Math.min(100, 10 + Math.log2(Math.max(1, degree)) * 20);
+
+                    const freqScore = Math.min(100, stats.frequency * 3);
+
+                    const crossInvScore = Math.min(100, (stats.investigation_ids.size - 1) * 50);
+
+                    const sentiment = stats.metadata?.average_sentiment || 0;
+                    const sentimentScore = Math.max(0, Math.min(100, 50 - sentiment * 50));
+
+                    const freshnessMap: Record<string, number> = { 'FRESH': 100, 'RECENT': 70, 'STALE': 30, 'ANCIENT': 0 };
+                    const freshnessScore = freshnessMap[agingCategory] || 0;
+
+                    const priorityScore = Math.round(
+                        0.25 * degreeScore +
+                        0.20 * freqScore +
+                        0.25 * crossInvScore +
+                        0.15 * sentimentScore +
+                        0.15 * freshnessScore
+                    );
+
+                    // Priority-based styling
+                    let priorityLevel = 'low';
+                    let priorityBorder = '2px solid white';
+                    let priorityGlow = 'none';
+
+                    if (priorityScore >= 75) {
+                        priorityLevel = 'high';
+                        priorityBorder = '3px solid #ef4444';
+                        priorityGlow = '0 0 15px rgba(239, 68, 68, 0.6)';
+                    } else if (priorityScore >= 50) {
+                        priorityLevel = 'medium';
+                        priorityBorder = '2px solid #f97316';
+                        priorityGlow = '0 0 8px rgba(249, 115, 22, 0.4)';
+                    }
+
+                    // Override for ANCIENT (reduce glow)
+                    if (agingCategory === 'ANCIENT') {
+                        priorityBorder = '2px dashed #cbd5e1';
+                        priorityGlow = 'none';
+                    }
+
+                    let bgColor = colorMap[stats.type] || '#10b981';
+
+                    // Edges
+                    stats.investigation_ids.forEach((invId: string) => {
+                        edges.push({
+                            id: `e-${invId}-${entityId}`,
+                            source: `inv-${invId}`,
+                            target: entityId,
+                            animated: priorityScore >= 50,
+                            style: { stroke: priorityScore >= 75 ? '#ef4444' : '#94a3b8' }
+                        });
                     });
-                } else if (monthlyAvg > 0) {
-                    const spikeRatio = pattern.freq7d / monthlyAvg;
-                    if (spikeRatio > 3 && pattern.freq7d > 1) {
+
+                    // Node Size based on priority and frequency
+                    const baseSize = 50 + (stats.frequency * 3);
+                    const size = priorityScore >= 75 ? Math.min(baseSize + 20, 140) : Math.min(baseSize, 120);
+                    const isSubdomain = stats.type === 'subdomain';
+
+                    nodes.push({
+                        id: entityId,
+                        data: {
+                            label: stats.value,
+                            type: stats.type,
+                            stats: {
+                                frequency: stats.frequency,
+                                first_seen: stats.first_seen.toISOString(),
+                                last_seen: stats.last_seen.toISOString(),
+                                aging_category: agingCategory,
+                                sources: Array.from(stats.sources)
+                            },
+                            priority: {
+                                score: priorityScore,
+                                level: priorityLevel,
+                                breakdown: {
+                                    degree: Math.round(degreeScore),
+                                    frequency: Math.round(freqScore),
+                                    cross_investigation: Math.round(crossInvScore),
+                                    sentiment: Math.round(sentimentScore),
+                                    freshness: Math.round(freshnessScore)
+                                }
+                            },
+                            metadata: stats.metadata
+                        },
+                        position: { x: 0, y: 0 },
+                        style: {
+                            background: bgColor,
+                            color: 'white',
+                            width: size,
+                            height: size,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            textAlign: 'center',
+                            padding: 10,
+                            borderRadius: isSubdomain ? '4px' : '50%',
+                            border: priorityBorder,
+                            boxShadow: priorityGlow,
+                            opacity: agingCategory === 'ANCIENT' ? 0.4 : (agingCategory === 'STALE' ? 0.7 : 1),
+                            fontSize: isSubdomain ? 10 : 12,
+                            filter: agingCategory === 'ANCIENT' ? 'grayscale(100%)' : (agingCategory === 'STALE' ? 'saturate(50%)' : 'none'),
+                            zIndex: priorityScore >= 75 ? 100 : (priorityScore >= 50 ? 50 : 1)
+                        }
+                    });
+                });
+
+                // --- Phase 29: Pattern Detection (Pseudo-AI) ---
+
+                // Calculate statistics for anomaly detection
+                const sevenDaysAgo = nowTime - (7 * oneDayMs);
+                const thirtyDaysAgo = nowTime - (30 * oneDayMs);
+
+                // Recalculate frequencies for pattern detection
+                const entityPatterns = new Map<string, {
+                    freq7d: number;
+                    freqMonthly: number;
+                    priorityScore: number;
+                    degree: number;
+                    type: string;
+                    label: string;
+                }>();
+
+                // Count recent activity per entity
+                intelRows.rows.forEach((item: any) => {
+                    const entId = `ent-${item.type}-${item.normalized_value}`;
+                    const itemDate = new Date(item.created_at || Date.now()).getTime();
+
+                    if (!entityPatterns.has(entId)) {
+                        const stats = entityStats.get(entId);
+                        entityPatterns.set(entId, {
+                            freq7d: 0,
+                            freqMonthly: 0,
+                            priorityScore: 0,
+                            degree: stats ? stats.investigation_ids.size + (stats.metadata?.relations?.length || 0) : 0,
+                            type: item.type,
+                            label: item.value
+                        });
+                    }
+
+                    const pattern = entityPatterns.get(entId)!;
+                    if (itemDate >= sevenDaysAgo) pattern.freq7d++;
+                    if (itemDate >= thirtyDaysAgo) pattern.freqMonthly++;
+                });
+
+                // Update priority scores from nodes
+                nodes.forEach(node => {
+                    if (entityPatterns.has(node.id)) {
+                        entityPatterns.get(node.id)!.priorityScore = node.data.priority?.score || 0;
+                    }
+                });
+
+                // 1. Anomaly Detection (Frequency Spike)
+                const anomalies: Array<{ label: string; type: string; spike_ratio: number; reason: string }> = [];
+
+                entityPatterns.forEach((pattern, entityId) => {
+                    const monthlyAvg = pattern.freqMonthly / 4; // Approx weekly average from monthly
+
+                    if (monthlyAvg === 0 && pattern.freq7d > 2) {
+                        // New entity with significant activity
                         anomalies.push({
                             label: pattern.label,
                             type: pattern.type,
-                            spike_ratio: Math.round(spikeRatio * 10) / 10,
-                            reason: `Frequency spike: ${spikeRatio.toFixed(1)}x normal`
+                            spike_ratio: pattern.freq7d,
+                            reason: `New entity with ${pattern.freq7d} sightings this week`
                         });
+                    } else if (monthlyAvg > 0) {
+                        const spikeRatio = pattern.freq7d / monthlyAvg;
+                        if (spikeRatio > 3 && pattern.freq7d > 1) {
+                            anomalies.push({
+                                label: pattern.label,
+                                type: pattern.type,
+                                spike_ratio: Math.round(spikeRatio * 10) / 10,
+                                reason: `Frequency spike: ${spikeRatio.toFixed(1)}x normal`
+                            });
 
-                        // Mark node as anomaly
-                        const node = nodes.find(n => n.id === entityId);
-                        if (node) {
-                            node.data.patterns = { is_anomaly: true, spike_ratio: spikeRatio };
-                            node.style.border = '3px solid #dc2626';
-                            node.style.boxShadow = '0 0 20px rgba(220, 38, 38, 0.8)';
+                            // Mark node as anomaly
+                            const node = nodes.find(n => n.id === entityId);
+                            if (node) {
+                                node.data.patterns = { is_anomaly: true, spike_ratio: spikeRatio };
+                                node.style.border = '3px solid #dc2626';
+                                node.style.boxShadow = '0 0 20px rgba(220, 38, 38, 0.8)';
+                            }
                         }
                     }
-                }
-            });
+                });
 
-            // 2. Key Entity Identification
-            const allPriorities = Array.from(entityPatterns.values()).map(p => p.priorityScore);
-            const avgPriority = allPriorities.reduce((a, b) => a + b, 0) / (allPriorities.length || 1);
-            const threshold = avgPriority + (100 - avgPriority) * 0.5;
+                // 2. Key Entity Identification
+                const allPriorities = Array.from(entityPatterns.values()).map(p => p.priorityScore);
+                const avgPriority = allPriorities.reduce((a, b) => a + b, 0) / (allPriorities.length || 1);
+                const threshold = avgPriority + (100 - avgPriority) * 0.5;
 
-            const allDegrees = Array.from(entityPatterns.values()).map(p => p.degree);
-            const avgDegree = allDegrees.reduce((a, b) => a + b, 0) / (allDegrees.length || 1);
+                const allDegrees = Array.from(entityPatterns.values()).map(p => p.degree);
+                const avgDegree = allDegrees.reduce((a, b) => a + b, 0) / (allDegrees.length || 1);
 
-            const topEntities: Array<{ label: string; type: string; priority: number; degree: number }> = [];
+                const topEntities: Array<{ label: string; type: string; priority: number; degree: number }> = [];
 
-            entityPatterns.forEach((pattern, entityId) => {
-                if (
-                    pattern.priorityScore >= threshold &&
-                    pattern.degree >= avgDegree &&
-                    ['person', 'organization'].includes(pattern.type)
-                ) {
-                    topEntities.push({
-                        label: pattern.label,
-                        type: pattern.type,
-                        priority: pattern.priorityScore,
-                        degree: pattern.degree
-                    });
+                entityPatterns.forEach((pattern, entityId) => {
+                    if (
+                        pattern.priorityScore >= threshold &&
+                        pattern.degree >= avgDegree &&
+                        ['person', 'organization'].includes(pattern.type)
+                    ) {
+                        topEntities.push({
+                            label: pattern.label,
+                            type: pattern.type,
+                            priority: pattern.priorityScore,
+                            degree: pattern.degree
+                        });
 
-                    // Mark node as key entity
-                    const node = nodes.find(n => n.id === entityId);
-                    if (node) {
-                        node.data.patterns = { ...node.data.patterns, is_key_entity: true };
-                        node.style.border = '3px solid #eab308';
+                        // Mark node as key entity
+                        const node = nodes.find(n => n.id === entityId);
+                        if (node) {
+                            node.data.patterns = { ...node.data.patterns, is_key_entity: true };
+                            node.style.border = '3px solid #eab308';
+                        }
                     }
-                }
-            });
+                });
 
-            // Sort and limit
-            topEntities.sort((a, b) => b.priority - a.priority);
-            anomalies.sort((a, b) => b.spike_ratio - a.spike_ratio);
+                // Sort and limit
+                topEntities.sort((a, b) => b.priority - a.priority);
+                anomalies.sort((a, b) => b.spike_ratio - a.spike_ratio);
 
-            return {
-                nodes,
-                edges,
-                insights: {
-                    top_entities: topEntities.slice(0, 5),
-                    anomalies: anomalies.slice(0, 5),
-                    stats: {
-                        total_nodes: nodes.length,
-                        total_edges: edges.length,
-                        avg_priority: Math.round(avgPriority),
-                        avg_degree: Math.round(avgDegree * 10) / 10
+                return {
+                    nodes,
+                    edges,
+                    insights: {
+                        top_entities: topEntities.slice(0, 5),
+                        anomalies: anomalies.slice(0, 5),
+                        stats: {
+                            total_nodes: nodes.length,
+                            total_edges: edges.length,
+                            avg_priority: Math.round(avgPriority),
+                            avg_degree: Math.round(avgDegree * 10) / 10
+                        }
                     }
-                }
-            };
+                };
 
-        } catch (err) {
-            app.log.error({ msg: 'Graph fetch failed', err: err instanceof Error ? err.message : err });
-            return reply.status(500).send({ error: "Graph fetch failed" });
-        }
-    });
+            } catch (err) {
+                app.log.error({ msg: 'Graph fetch failed', err: err instanceof Error ? err.message : err });
+                return reply.status(500).send({ error: "Graph fetch failed" });
+            }
+        });
 
-    return app;
-}
+        return app;
+    }

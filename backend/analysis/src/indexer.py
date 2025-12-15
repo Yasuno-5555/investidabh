@@ -24,6 +24,8 @@ except Exception as e:
     client = None
     index = None
 
+import asyncio
+
 def strip_html(html_content):
     soup = BeautifulSoup(html_content, "html.parser")
     # スクリプトやスタイルを除去
@@ -33,13 +35,16 @@ def strip_html(html_content):
     text = soup.get_text(separator=' ', strip=True)
     return text[:100000] # 容量制限のため10万文字程度でカット
 
-def index_content(investigation_id, url, html_content):
+async def index_content(investigation_id, url, html_content):
     if not index:
         print("[!] Meilisearch index not initialized.")
         return False
+        
+    loop = asyncio.get_running_loop()
 
     try:
-        text_content = strip_html(html_content)
+        # Offload CPU-bound HTML stripping
+        text_content = await loop.run_in_executor(None, strip_html, html_content)
         
         doc = {
             'id': investigation_id, # Meilisearchのdocument IDとして使用
@@ -50,8 +55,10 @@ def index_content(investigation_id, url, html_content):
             # 'indexed_at': str(os.getenv("TIMESTAMP", "")) # 必要なら追加
         }
         
-        # 追加または更新
-        task = index.add_documents([doc])
+        # Offload Network I/O Meilisearch
+        # index.add_documents implies synchronous HTTP request
+        await loop.run_in_executor(None, index.add_documents, [doc])
+        
         print(f"[+] Indexed investigation {investigation_id} to Meilisearch.")
         return True
     except Exception as e:

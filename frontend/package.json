@@ -21,6 +21,7 @@
         "@types/node": "latest",
         "@types/react": "latest",
         "@types/react-dom": "latest",
+        "@types/dagre": "^0.7.52",
         "tailwindcss": "latest",
         "postcss": "latest",
         "autoprefixer": "latest"

@@ -14,6 +14,7 @@ import dagre from 'dagre';
 import axios from 'axios';
 import Navbar from '../../components/Navbar';
 import Spinner from '../../components/Spinner';
+import AlertTicker from '../../components/AlertTicker';
 
 // Graph Layout Helper
 const getLayoutedElements = (nodes: any[], edges: any[]) => {
@@ -402,6 +403,67 @@ export default function GraphPage() {
                                         </div>
                                     </div>
 
+                                    {/* --- Phase 32: TTP & Intelligence --- */}
+                                    {(selectedNode.data.metadata?.ttps?.length > 0) && (
+                                        <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                                            <span className="text-xs font-bold text-red-600 uppercase tracking-wider block mb-2">Threat Indicators (TTPs)</span>
+                                            <div className="flex flex-wrap gap-1">
+                                                {selectedNode.data.metadata.ttps.map((ttp: string) => (
+                                                    <span key={ttp} className="px-2 py-1 bg-red-100 text-red-800 text-xs font-bold rounded border border-red-200">
+                                                        {ttp}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Intelligence Tab (Enrichment) */}
+                                    {(selectedNode.data.metadata?.whois || selectedNode.data.metadata?.dns_records) && (
+                                        <div className="mt-4 pt-4 border-t border-slate-100">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Enrichment Data</span>
+
+                                            {/* WHOIS */}
+                                            {selectedNode.data.metadata?.whois && (
+                                                <div className="mb-3">
+                                                    <span className="text-[10px] text-slate-500 font-bold block bg-slate-100 px-2 py-1 rounded-t">WHOIS</span>
+                                                    <div className="bg-slate-50 border border-t-0 border-slate-100 p-2 rounded-b text-xs space-y-1">
+                                                        <div className="flex justify-between">
+                                                            <span className="text-slate-400">Registrar</span>
+                                                            <span className="text-slate-700 font-medium truncate max-w-[150px]">{selectedNode.data.metadata.whois.registrar}</span>
+                                                        </div>
+                                                        <div className="flex justify-between">
+                                                            <span className="text-slate-400">Org</span>
+                                                            <span className="text-slate-700 font-medium truncate max-w-[150px]">{selectedNode.data.metadata.whois.org}</span>
+                                                        </div>
+                                                        <div className="flex justify-between">
+                                                            <span className="text-slate-400">Created</span>
+                                                            <span className="text-slate-700">{selectedNode.data.metadata.whois.creation_date?.split(' ')[0]}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* DNS */}
+                                            {selectedNode.data.metadata?.dns_records && (
+                                                <div>
+                                                    <span className="text-[10px] text-slate-500 font-bold block bg-slate-100 px-2 py-1 rounded-t">DNS Records</span>
+                                                    <div className="bg-slate-50 border border-t-0 border-slate-100 p-2 rounded-b text-xs font-mono">
+                                                        {Object.keys(selectedNode.data.metadata.dns_records).map((type) => {
+                                                            const recs = selectedNode.data.metadata.dns_records[type];
+                                                            return (
+                                                                <div key={type} className="mb-1 last:mb-0">
+                                                                    <span className="text-blue-500 font-bold">{type}</span>
+                                                                    <span className="text-slate-600 ml-2">{Array.isArray(recs) ? recs[0] : recs}</span>
+                                                                    {Array.isArray(recs) && recs.length > 1 && <span className="text-slate-400 text-[10px] ml-1">(+{recs.length - 1})</span>}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
                                     {/* --- Phase 28: Analyst Tools --- */}
                                     <div className="mt-4 pt-4 border-t border-slate-100">
                                         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Analyst Tools</span>
@@ -488,6 +550,9 @@ export default function GraphPage() {
                             </div>
                         </div>
                     </Panel>
+
+                    {/* Phase 32: Alert Ticker */}
+                    <AlertTicker />
                 </ReactFlow>
             </div>
         </div>

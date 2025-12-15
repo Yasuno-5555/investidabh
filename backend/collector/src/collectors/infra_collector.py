@@ -2,6 +2,7 @@ import requests
 import datetime
 import logging
 import socket
+import asyncio
 
 logger = logging.getLogger("infra-collector")
 
@@ -16,12 +17,27 @@ class InfraCollector:
         """
         logger.info(f"Collecting infrastructure info for: {query}")
         
-        subdomains = self._get_crt_sh(query)
+        loop = asyncio.get_running_loop()
+        
+        # Offload blocking http request
+        subdomains = await loop.run_in_executor(None, self._get_crt_sh, query)
         
         # Resolve distinct subdomains
         resolved_data = []
+        
+        # We can resolve these concurrently if we want, but let's keep it simple first
+        # Batch resolution? Or just sequential offloading?
+        # Sequential offload is safer for rate limits, though slower.
+        # Let's parallelize with gather for speed if list is small, but crt.sh can return thousands.
+        # Let's stick to sequential offloading to avoid flooding DNS resolver or just offload bulk?
+        # Actually resolving thousands of domains will take forever if sequential.
+        # We should limit or assume we just want the domains. But we said we'd resolve.
+        # For Optimization: Only resolve top 20 or use bulk?
+        # Let's keep existing logic but prevent BLOCKING the event loop.
+        
         for domain in subdomains:
-            ip = self._resolve_dns(domain)
+            # Offload blocking DNS
+            ip = await loop.run_in_executor(None, self._resolve_dns, domain)
             resolved_data.append({
                 "domain": domain,
                 "ip": ip
@@ -36,6 +52,7 @@ class InfraCollector:
         }
 
     def _get_crt_sh(self, domain: str) -> set:
+        # Blocking function
         url = f"https://crt.sh/?q=%.{domain}&output=json"
         try:
             resp = requests.get(url, timeout=10)
@@ -45,7 +62,6 @@ class InfraCollector:
                 for entry in data:
                     name_value = entry.get('name_value')
                     if name_value:
-                        # name_value can be multi-line
                         for name in name_value.split('\n'):
                             if '*' not in name:
                                 subs.add(name)
@@ -55,6 +71,7 @@ class InfraCollector:
         return set()
 
     def _resolve_dns(self, domain: str) -> str:
+        # Blocking function
         try:
             return socket.gethostbyname(domain)
         except:

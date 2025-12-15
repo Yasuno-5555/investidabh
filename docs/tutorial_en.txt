@@ -1,0 +1,296 @@
+================================================================================
+                    INVESTIDUBH TUTORIAL GUIDE
+                 Commercial-Grade OSINT Platform
+================================================================================
+
+Table of Contents
+--------------------------------------------------------------------------------
+1. Introduction
+2. System Requirements
+3. Installation
+4. Initial Setup
+5. Basic Usage
+6. Advanced Features
+7. Troubleshooting
+8. Frequently Asked Questions (FAQ)
+================================================================================
+
+
+================================================================================
+1. INTRODUCTION
+================================================================================
+
+Investidubh is a self-hosted OSINT platform for automated web intelligence 
+collection and analysis.
+
+Key Features:
+  • Multi-source data collection (Web, RSS, SNS, GitHub, Certificate Transparency)
+  • Automatic entity extraction (People, Organizations, Emails, Domains, IPs)
+  • Relationship analysis and graph visualization
+  • Temporal intelligence (data freshness evaluation)
+  • Priority scoring (automatic identification of important entities)
+  • Pattern detection (automatic anomaly detection)
+  • PDF report generation
+
+Built entirely with free, open-source tools with no external API dependencies.
+
+
+================================================================================
+2. SYSTEM REQUIREMENTS
+================================================================================
+
+【Required】
+  • Docker Desktop 4.0 or later
+  • Docker Compose 2.0 or later
+  • RAM: 4GB minimum (8GB recommended)
+  • Disk: 10GB+ free space
+
+【Recommended Environment】
+  • OS: Windows 10/11, macOS 12+, Ubuntu 20.04+
+  • CPU: 4 cores or more
+  • SSD recommended (for database I/O performance)
+
+
+================================================================================
+3. INSTALLATION
+================================================================================
+
+【Step 1】Clone the Repository
+
+    git clone https://github.com/your-org/investidubh.git
+    cd investidubh
+
+【Step 2】Configure Environment Variables
+
+    cp .env.example .env
+    
+    Edit the .env file and set the following:
+      - JWT_SECRET: Any secure string (required)
+      - DATABASE_URL: PostgreSQL connection string (pre-configured by default)
+
+【Step 3】Start the System
+
+    docker-compose up -d --build
+
+    Note: First startup takes 5-10 minutes.
+    Verify all services are running:
+    
+    docker-compose ps
+
+【Step 4】Verify Installation
+
+    Open your browser and navigate to http://localhost:3000
+
+
+================================================================================
+4. INITIAL SETUP
+================================================================================
+
+【4.1 Create Account】
+
+  1. Navigate to http://localhost:3000/register
+  2. Enter username and password
+  3. Click "Register"
+  4. You will be redirected to the login page
+
+【4.2 Login】
+
+  1. Navigate to http://localhost:3000/login
+  2. Enter your registered username and password
+  3. Click "Login"
+  4. You will be redirected to the dashboard
+
+
+================================================================================
+5. BASIC USAGE
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 Creating an Investigation
+--------------------------------------------------------------------------------
+
+  1. On the dashboard, click "New Investigation"
+  2. Enter the target URL (e.g., https://example.com)
+  3. Click "Create"
+  4. Collection will start automatically
+
+  Note: Status changes to "COMPLETED" when collection finishes
+
+--------------------------------------------------------------------------------
+5.2 Viewing Collected Data
+--------------------------------------------------------------------------------
+
+  1. Click on an investigation from the list
+  2. "Artifacts" tab: Raw data (HTML, screenshots)
+  3. "Intelligence" tab: Extracted entities list
+
+--------------------------------------------------------------------------------
+5.3 Graph Visualization
+--------------------------------------------------------------------------------
+
+  1. Click "Graph" in the navigation
+  2. All investigation entities displayed as a network graph
+  
+  【Graph Controls】
+    • Drag: Pan the entire graph
+    • Scroll: Zoom in/out
+    • Click node: Show detail panel
+    • Timeline slider: Filter by time
+
+  【Node Colors and Shapes】
+    • Circle: People, organizations, domains, etc.
+    • Square: Subdomains
+    • Red border/glow: High priority entity
+    • Orange border: Medium priority
+    • Gray/faded: Old entity (ANCIENT)
+
+--------------------------------------------------------------------------------
+5.4 Entity Details
+--------------------------------------------------------------------------------
+
+  Click on a node to display the detail panel:
+  
+  • Basic Info: Type, value
+  • Priority Score: 0-100 score with breakdown
+  • Temporal Info: First seen, last seen, frequency
+  • Freshness: FRESH (within 7 days) to ANCIENT (over 1 year)
+  • Relationships: Links to related entities
+  • Sentiment: Positive/negative score
+
+--------------------------------------------------------------------------------
+5.5 Search Function
+--------------------------------------------------------------------------------
+
+  1. Enter keywords in the search bar at the top
+  2. Cross-search entities, artifacts, and investigations
+  3. Click results to view details
+
+
+================================================================================
+6. ADVANCED FEATURES
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 Analyst Tools
+--------------------------------------------------------------------------------
+
+  【Notes】
+    Add notes to entities in the "Notes" section of the detail panel.
+    Supports Markdown format. Click "Save Notes" to save.
+
+  【Tagging】
+    Tag entities for classification:
+      • Watchlist: Entities to monitor
+      • Confirmed: Confirmed threats
+      • Ignore: Ignore this entity
+      • Reviewed: Review completed
+    
+    Select from dropdown and click "+" to add.
+
+  【Pinning】
+    Click the "Pin" button to fix the node's position.
+    Position is preserved during graph layout recalculation.
+
+--------------------------------------------------------------------------------
+6.2 Insights Panel
+--------------------------------------------------------------------------------
+
+  Auto-analysis results are displayed in the top-right of the graph screen:
+
+  【🔑 Key Entities】
+    Important entities with high priority scores and many connections.
+    People and organizations are automatically selected.
+
+  【⚠️ Anomalies】
+    Entities with activity spikes compared to historical averages.
+    Spike ratio is displayed (e.g., 4.5x).
+
+--------------------------------------------------------------------------------
+6.3 PDF Report Export
+--------------------------------------------------------------------------------
+
+  1. Click "📄 Export PDF" on the graph screen
+  2. PDF is auto-generated and downloaded
+
+  【Report Contents】
+    • Cover: Investigation target, generation date
+    • Executive Summary: Entity count, relationship count
+    • Key Findings: Important entities list
+    • Relationship Map: Graph image (optional)
+
+--------------------------------------------------------------------------------
+6.4 Understanding Priority Scores
+--------------------------------------------------------------------------------
+
+  Scores range from 0-100 and are composed of 5 factors:
+
+  | Factor                | Weight | Description                      |
+  |-----------------------|--------|----------------------------------|
+  | Degree Centrality     | 25%    | Number of connected edges        |
+  | Frequency             | 20%    | Number of sightings              |
+  | Cross-Investigation   | 25%    | Found in multiple investigations |
+  | Negative Sentiment    | 15%    | Negative mentions                |
+  | Freshness             | 15%    | Data recency                     |
+
+  【Score Thresholds】
+    • 75-100: High priority (red glow)
+    • 50-74: Medium priority (orange border)
+    • 0-49: Low priority (normal display)
+
+
+================================================================================
+7. TROUBLESHOOTING
+================================================================================
+
+【Problem】Services won't start
+  → Check detailed logs with: docker-compose logs -f
+  → Reset volumes and restart: docker-compose down -v && docker-compose up -d
+
+【Problem】Can't login
+  → Clear browser local storage
+  → JWT token may have expired
+
+【Problem】Collection fails
+  → Target site may be blocking access
+  → Consider Tor integration (for OPSEC)
+
+【Problem】Graph won't display
+  → Check browser developer tools for errors
+  → Verify API URL setting (NEXT_PUBLIC_API_URL)
+
+
+================================================================================
+8. FREQUENTLY ASKED QUESTIONS (FAQ)
+================================================================================
+
+Q: Is it free to use?
+A: Yes. Investidubh is built entirely with free, open-source tools.
+   There are no dependencies on external paid APIs.
+
+Q: Where is data stored?
+A: All data is stored in local Docker volumes.
+   PostgreSQL (metadata), MinIO (raw files), Redis (queue).
+
+Q: Can multiple users use it?
+A: Yes. Data is isolated per user.
+   Each user can only access their own investigations.
+
+Q: Can it be used in production?
+A: Internal network or VPN access is recommended.
+   If exposing to public internet, configure HTTPS and reverse proxy.
+
+Q: What kinds of sites can be investigated?
+A: General websites, RSS feeds, SNS (Mastodon), GitHub repositories, etc.
+   Please comply with robots.txt and terms of service.
+
+
+================================================================================
+                              SUPPORT
+================================================================================
+
+Documentation: docs/
+GitHub Issues: https://github.com/your-org/investidubh/issues
+
+================================================================================
+                    © 2024 Investidubh Project
+================================================================================
