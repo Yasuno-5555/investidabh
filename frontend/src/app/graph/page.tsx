@@ -15,6 +15,7 @@ import axios from 'axios';
 import Navbar from '../../components/Navbar';
 import Spinner from '../../components/Spinner';
 import AlertTicker from '../../components/AlertTicker';
+import TimelineView from '../../components/TimelineView';
 
 // Graph Layout Helper
 const getLayoutedElements = (nodes: any[], edges: any[]) => {
@@ -70,6 +71,60 @@ export default function GraphPage() {
     const [minTime, setMinTime] = useState(0);
     const [maxTime, setMaxTime] = useState(100);
     const [currentTime, setCurrentTime] = useState(100);
+
+    // Phase 33.2: Hypothesis State
+    const [isHypothesisMode, setIsHypothesisMode] = useState(false);
+    const [hypothesisNodes, setHypothesisNodes] = useState<any[]>([]);
+    const [hypothesisEdges, setHypothesisEdges] = useState<any[]>([]);
+
+    const addShadowNode = () => {
+        const id = `shadow-${Date.now()}`;
+        const newNode = {
+            id,
+            type: 'default', // or special 'hypothesis' type if we register it
+            position: { x: Math.random() * 500, y: Math.random() * 500 },
+            data: { label: 'New Hypothesis', type: 'shadow' },
+            style: {
+                border: '2px dashed #a855f7', // Purple dashed
+                backgroundColor: '#faf5ff',
+                color: '#6b21a8',
+                width: 180,
+                borderRadius: 8,
+                padding: 10
+            },
+            draggable: true,
+        };
+        setHypothesisNodes((prev) => [...prev, newNode]);
+        setNodes((prev) => [...prev, newNode]); // Add to ReactFlow nodes immediately? Or merge?
+        // ReactFlow manages 'nodes' state passed to <ReactFlow nodes={nodes}>.
+        // We should allow basic dragging.
+    };
+
+    // When toggling mode, we might want to filter view or just overlay.
+    // For now, simple overlay.
+
+    // Merge Hypothesis Data into Main Flow
+    // We update 'nodes' state when hypothesis changes? 
+    // Or we keep separate and merge on render? 
+    // ReactFlow takes 'nodes' prop. 'nodes' state is managed by 'useNodesState'.
+    // To mix them, we should append hypothesisNodes to 'nodes' when created.
+    // But 'useNodesState' handles internal updates.
+    // Better: Update 'nodes' directly when adding shadow node.
+
+    // Connection handling for shadow edges
+    const onConnect = (params: any) => {
+        if (!isHypothesisMode) return; // Only allow manual connecting in hypothesis mode for now?
+        // Or allowing connecting real nodes too? 
+        // Let's assume user connects shadow-shadow or real-shadow.
+        const newEdge = {
+            ...params,
+            id: `e-${params.source}-${params.target}-${Date.now()}`,
+            animated: true,
+            style: { stroke: '#a855f7', strokeDasharray: '5,5' }
+        };
+        setEdges((eds) => [...eds, newEdge]);
+        setHypothesisEdges((eds) => [...eds, newEdge]);
+    };
 
     const fetchData = async () => {
         setLoading(true);
@@ -166,9 +221,11 @@ export default function GraphPage() {
                     edges={edges}
                     onNodesChange={onNodesChange}
                     onEdgesChange={onEdgesChange}
-                    onNodeClick={onNodeClick}
-                    onPaneClick={closeDetails}
+                    onConnect={onConnect}
+                    onNodeClick={(e, node) => setSelectedNode(node)}
                     fitView
+                    attributionPosition="bottom-right"
+                    minZoom={0.1}
                 >
                     <Background color="#cbd5e1" gap={20} />
                     <Controls />
@@ -184,16 +241,29 @@ export default function GraphPage() {
                                 {loading && <Spinner className="w-4 h-4" />}
                                 {loading ? 'Refreshing...' : 'Refresh'}
                             </button>
-
-                            {/* Phase 30: Export PDF Button */}
                             <button
+                                disabled={loading}
                                 onClick={async () => {
+                                    // Phase 34: Export PDF
                                     try {
-                                        // Simple export without html2canvas for now
+                                        // Find an investigation ID (MVP: First one found)
+                                        const invIds = Array.from(new Set(nodes.map((n: any) => n.id.startsWith('inv-') ? n.id.replace('inv-', '') : null).filter(Boolean)));
+                                        const targetInvId = invIds.length > 0 ? invIds[0] : null;
+
+                                        if (!targetInvId) {
+                                            alert("No investigation data found to export.");
+                                            return;
+                                        }
+
                                         const token = localStorage.getItem('token');
-                                        const response = await axios.post(
-                                            `${process.env.NEXT_PUBLIC_API_URL}/api/report/generate`,
-                                            { investigation_id: 'all', graph_image: null },
+                                        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
+                                        // Simple UI Feedback
+                                        const btn = document.getElementById('export-pdf-btn');
+                                        if (btn) btn.innerText = "Generating...";
+
+                                        const response = await axios.get(
+                                            `${API_URL}/api/investigations/${targetInvId}/report`,
                                             {
                                                 headers: { Authorization: `Bearer ${token}` },
                                                 responseType: 'blob'
@@ -203,15 +273,23 @@ export default function GraphPage() {
                                         const url = window.URL.createObjectURL(new Blob([response.data]));
                                         const link = document.createElement('a');
                                         link.href = url;
-                                        link.setAttribute('download', `investidubh-report-${Date.now()}.pdf`);
+                                        // Get filename from header or generate
+                                        link.setAttribute('download', `investidubh-report-${targetInvId}-${new Date().toISOString().split('T')[0]}.pdf`);
                                         document.body.appendChild(link);
                                         link.click();
                                         link.remove();
-                                    } catch (err) {
-                                        alert('PDF export failed. Please try again.');
+
+                                        if (btn) btn.innerText = "📄 Export PDF";
+
+                                    } catch (err: any) {
+                                        console.error(err);
+                                        alert(`PDF export failed: ${err.response?.statusText || err.message}`);
+                                        const btn = document.getElementById('export-pdf-btn');
+                                        if (btn) btn.innerText = "📄 Export PDF";
                                     }
                                 }}
-                                className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-sm hover:bg-blue-700 transition-all font-semibold text-sm flex items-center gap-2"
+                                id="export-pdf-btn"
+                                className={`bg-blue-600 text-white px-4 py-2 rounded-lg shadow-sm hover:bg-blue-700 transition-all font-semibold text-sm flex items-center gap-2 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
                                 📄 Export PDF
                             </button>
@@ -220,6 +298,7 @@ export default function GraphPage() {
                         {/* Phase 29: Insights Panel */}
                         {(initialNodes as any)?.insights && (
                             <div className="bg-white/90 backdrop-blur rounded-xl shadow-lg border border-white/50 p-3 text-xs">
+                                {/* ... existing insights ... */}
                                 {/* Top Entities */}
                                 {(initialNodes as any).insights.top_entities?.length > 0 && (
                                     <div className="mb-3">
@@ -232,21 +311,39 @@ export default function GraphPage() {
                                         ))}
                                     </div>
                                 )}
-
-                                {/* Anomalies */}
-                                {(initialNodes as any).insights.anomalies?.length > 0 && (
-                                    <div>
-                                        <span className="font-bold text-red-500 uppercase tracking-wide block mb-2">⚠️ Anomalies</span>
-                                        {(initialNodes as any).insights.anomalies.slice(0, 3).map((a: any, i: number) => (
-                                            <div key={i} className="flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
-                                                <span className="font-medium text-slate-700 truncate max-w-[140px]">{a.label}</span>
-                                                <span className="text-red-600 font-bold">{a.spike_ratio}x</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
+                                {/* ... */}
                             </div>
                         )}
+
+                        {/* Phase 36: Integrity Check (Admin) */}
+                        <div className="mt-2 text-right">
+                            <button
+                                onClick={async () => {
+                                    if (!confirm("Run full integrity verification? This may take time.")) return;
+                                    try {
+                                        const token = localStorage.getItem('token');
+                                        alert("Running verification... Please wait.");
+                                        const res = await axios.post(
+                                            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/admin/verify-integrity`,
+                                            {},
+                                            { headers: { Authorization: `Bearer ${token}` } }
+                                        );
+                                        const r = res.data;
+                                        alert(`Verification Complete.\nScanned: ${r.scanned}\nPassed: ${r.passed}\nFailed: ${r.failed}\nErrors: ${r.errors.length}`);
+                                        if (r.failed > 0) {
+                                            console.error("Corrupted Artifacts:", r.corrupted_artifacts);
+                                            alert("CRITICAL WARNING: Integrity failures detected! Check console for details.");
+                                        }
+                                    } catch (e: any) {
+                                        alert("Verification failed: " + e.message);
+                                        console.error(e);
+                                    }
+                                }}
+                                className="text-[10px] text-slate-400 hover:text-slate-600 underline"
+                            >
+                                Run System Integrity Check 🛡️
+                            </button>
+                        </div>
                     </Panel>
 
                     {/* Detail Panel */}
@@ -408,11 +505,20 @@ export default function GraphPage() {
                                         <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-3">
                                             <span className="text-xs font-bold text-red-600 uppercase tracking-wider block mb-2">Threat Indicators (TTPs)</span>
                                             <div className="flex flex-wrap gap-1">
-                                                {selectedNode.data.metadata.ttps.map((ttp: string) => (
-                                                    <span key={ttp} className="px-2 py-1 bg-red-100 text-red-800 text-xs font-bold rounded border border-red-200">
-                                                        {ttp}
-                                                    </span>
-                                                ))}
+                                                {selectedNode.data.metadata.ttps.map((ttp: string) => {
+                                                    // Simple mapping for display
+                                                    const ttpNames: Record<string, string> = {
+                                                        'T1566': 'Phishing', 'T1566.002': 'Spearphishing Link',
+                                                        'T1190': 'Exploit Public-Facing App', 'T1110': 'Brute Force',
+                                                        'T1588': 'Malware'
+                                                    };
+                                                    const name = ttpNames[ttp] || ttp;
+                                                    return (
+                                                        <span key={ttp} title={name !== ttp ? `${ttp}: ${name}` : ttp} className="px-2 py-1 bg-red-100 text-red-800 text-xs font-bold rounded border border-red-200 cursor-help">
+                                                            {name !== ttp ? `[${ttp}] ${name}` : ttp}
+                                                        </span>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     )}
@@ -445,19 +551,18 @@ export default function GraphPage() {
 
                                             {/* DNS */}
                                             {selectedNode.data.metadata?.dns_records && (
-                                                <div>
-                                                    <span className="text-[10px] text-slate-500 font-bold block bg-slate-100 px-2 py-1 rounded-t">DNS Records</span>
-                                                    <div className="bg-slate-50 border border-t-0 border-slate-100 p-2 rounded-b text-xs font-mono">
-                                                        {Object.keys(selectedNode.data.metadata.dns_records).map((type) => {
-                                                            const recs = selectedNode.data.metadata.dns_records[type];
-                                                            return (
-                                                                <div key={type} className="mb-1 last:mb-0">
-                                                                    <span className="text-blue-500 font-bold">{type}</span>
-                                                                    <span className="text-slate-600 ml-2">{Array.isArray(recs) ? recs[0] : recs}</span>
-                                                                    {Array.isArray(recs) && recs.length > 1 && <span className="text-slate-400 text-[10px] ml-1">(+{recs.length - 1})</span>}
-                                                                </div>
-                                                            );
-                                                        })}
+                                                <div className="mb-3">
+                                                    <span className="text-[10px] text-slate-500 font-bold block bg-slate-100 px-2 py-1 rounded-t">DNS RECORDS</span>
+                                                    <div className="bg-slate-50 border border-t-0 border-slate-100 p-2 rounded-b text-xs space-y-1">
+                                                        {Object.keys(selectedNode.data.metadata.dns_records).map((rtype) => (
+                                                            <div key={rtype} className="flex justify-between">
+                                                                <span className="text-slate-400 font-mono">{rtype}</span>
+                                                                <span className="text-slate-700 font-mono truncate max-w-[150px]">
+                                                                    {selectedNode.data.metadata.dns_records[rtype][0]}
+                                                                    {selectedNode.data.metadata.dns_records[rtype].length > 1 && <span className="text-xs text-slate-400 ml-1">(+{selectedNode.data.metadata.dns_records[rtype].length - 1})</span>}
+                                                                </span>
+                                                            </div>
+                                                        ))}
                                                     </div>
                                                 </div>
                                             )}
@@ -549,6 +654,49 @@ export default function GraphPage() {
                                 <span>{formatDate(maxTime)}</span>
                             </div>
                         </div>
+                    </Panel>
+
+                    {/* --- Phase 33.2: Hypothesis Toolbar --- */}
+                    {isHypothesisMode && (
+                        <Panel position="top-center" className="mt-4">
+                            <div className="bg-purple-900/90 backdrop-blur text-white px-6 py-3 rounded-full shadow-2xl border border-purple-500 flex items-center gap-4 animate-in fade-in slide-in-from-top-4">
+                                <span className="font-bold tracking-wider text-purple-200 text-xs uppercase">Hypothesis Mode</span>
+                                <div className="h-4 w-px bg-purple-700"></div>
+                                <button
+                                    onClick={addShadowNode}
+                                    className="flex items-center gap-2 hover:text-purple-200 transition-colors text-sm font-medium"
+                                >
+                                    <span className="text-lg">⊕</span> Add Shadow Entity
+                                </button>
+                                <button
+                                    onClick={() => setHypothesisEdges([])}
+                                    className="text-xs text-purple-400 hover:text-white transition-colors"
+                                >
+                                    Clear Edges
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setHypothesisNodes([]);
+                                        setHypothesisEdges([]);
+                                    }}
+                                    className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                                >
+                                    Reset All
+                                </button>
+                            </div>
+                        </Panel>
+                    )}
+
+                    <Panel position="top-right" className="mr-4 mt-4">
+                        <button
+                            onClick={() => setIsHypothesisMode(!isHypothesisMode)}
+                            className={`px-4 py-2 rounded-lg font-bold shadow-lg transition-all ${isHypothesisMode
+                                ? 'bg-purple-600 text-white ring-2 ring-purple-400 ring-offset-2'
+                                : 'bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                        >
+                            {isHypothesisMode ? '🔮 Exit Hypothesis' : '🔮 Hypothesis Mode'}
+                        </button>
                     </Panel>
 
                     {/* Phase 32: Alert Ticker */}

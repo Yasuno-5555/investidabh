@@ -11,6 +11,11 @@ from scorer import run_scoring
 from enrichers import WhoisEnricher, DNSEnricher
 from alerts import AlertManager
 from ttp_map import TTPMapper
+from migrate_db import migrate
+
+# Configure Logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Initialize Phase 31 Components
 whois_enricher = WhoisEnricher()
@@ -19,6 +24,26 @@ alert_manager = AlertManager()
 ttp_mapper = TTPMapper()
 # Load basic watchlist for demo - ideally this comes from DB/Config
 alert_manager.load_watchlist(['bad.com', 'evil-corp.org', 'test@example.com']) 
+
+from bs4 import BeautifulSoup
+from minio import Minio
+import psycopg
+
+# Configuration
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+DB_DSN = os.getenv("DATABASE_URL", "postgres://investidubh:secret@localhost:5432/investidubh_core")
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "admin")
+MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "password")
+BUCKET_NAME = "raw-data"
+
+# Initialize MinIO
+minio_client = Minio(
+    MINIO_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=False
+)
 
 async def process_enrichment_and_alerts(investigation_id, r_conn):
     """
@@ -35,7 +60,7 @@ async def process_enrichment_and_alerts(investigation_id, r_conn):
             async with aconn.cursor() as cur:
                 # 1. Fetch all entities for this investigation
                 await cur.execute(
-                    "SELECT id, entity_type, value, metadata FROM intelligence WHERE investigation_id = %s",
+                    "SELECT id, type, value, metadata FROM intelligence WHERE investigation_id = %s",
                     (investigation_id,)
                 )
                 rows = await cur.fetchall()
@@ -83,9 +108,19 @@ async def process_enrichment_and_alerts(investigation_id, r_conn):
 
                     # 5. Alerts
                     # Check watchlist and TTPs
-                    alert_manager.check_and_alert(ent_type, ent_value, ent_metadata)
+                    alert_manager.check_and_alert(
+                        entity_type=ent_type,
+                        entity_value=ent_value,
+                        investigation_id=investigation_id,
+                        metadata=ent_metadata
+                    )
                     if new_tags:
-                        alert_manager.check_and_alert(ent_type, ent_value, {'ttps': new_tags, 'msg': 'TTP Detected'})
+                        alert_manager.check_and_alert(
+                            entity_type=ent_type,
+                            entity_value=ent_value,
+                            investigation_id=investigation_id,
+                            metadata={'ttps': new_tags, 'msg': 'TTP Detected'}
+                        )
 
             await aconn.commit()
             
@@ -94,7 +129,7 @@ async def process_enrichment_and_alerts(investigation_id, r_conn):
 
 async def worker():
     # Run DB Migration on Startup
-    await migrate()
+    # await migrate()
 
     logger.info(f"[*] Analysis Worker started. Connecting to {REDIS_URL}...")
     try:

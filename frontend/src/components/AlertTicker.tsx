@@ -56,17 +56,25 @@ export default function AlertTicker() {
                     const lines = buffer.split('\n\n');
                     buffer = lines.pop() || ''; // Keep incomplete part
 
-                    for (const line of lines) {
-                        const dataLine = line.split('\n').find(l => l.startsWith('data: '));
-                        if (dataLine) {
-                            const jsonStr = dataLine.replace('data: ', '');
+                    for (const block of lines) {
+                        const blockLines = block.split('\n');
+                        let eventType = 'message';
+                        let dataStr = '';
+
+                        for (const line of blockLines) {
+                            if (line.startsWith('event: ')) {
+                                eventType = line.substring(7).trim();
+                            } else if (line.startsWith('data: ')) {
+                                dataStr = line.substring(6);
+                            }
+                        }
+
+                        if (eventType === 'alert' && dataStr) {
                             try {
-                                const data = JSON.parse(jsonStr);
-                                if (data.type === 'ALERT') {
-                                    setAlerts(prev => [data, ...prev].slice(0, 5)); // Keep last 5
-                                }
+                                const data = JSON.parse(dataStr);
+                                setAlerts(prev => [data, ...prev].slice(0, 5));
                             } catch (e) {
-                                // ignore heartbeat or parse error
+                                console.error("Alert parse error", e);
                             }
                         }
                     }

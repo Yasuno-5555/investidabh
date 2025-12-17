@@ -9,34 +9,33 @@
 
 ## ✨ Features
 
-### 📡 Multi-Source Data Collection
+### 📡 Multi-Source Data Collection & OSINT
 | Source | Description |
 |--------|-------------|
 | **Web Scraping** | Playwright-based HTML/Screenshot preservation |
-| **RSS Feeds** | Automated news monitoring |
-| **Social Media** | Mastodon public timeline, Twitter API v2 |
-| **GitHub** | Repository/commit analysis, contributor extraction |
-| **Certificate Transparency** | Subdomain discovery via crt.sh |
+| **Network Recon** | WHOIS, DNS (A, MX, TXT) automated lookups |
+| **Enrichment** | Integration with HIBP, GitHub, etc. |
+| **RSS / Social** | Automated news & social media monitoring |
 | **Wayback Machine** | Historical snapshot analysis ("Ghost Entities") |
 
-### 🧠 Analysis Engine
-- **Entity Extraction**: PERSON, ORG, EMAIL, DOMAIN, IP, PHONE, SUBDOMAIN, SOCIAL_ACCOUNT
-- **Relationship Engine**: NLP-based (spaCy) + heuristic linking
-- **Temporal Intelligence**: Aging categories (FRESH → ANCIENT)
-- **Priority Score 2.0**: 5-component algorithm (Degree, Frequency, Cross-Investigation, Sentiment, Freshness)
-- **Pattern Detection**: Frequency spike anomalies, Key entity identification
+### 🧠 Advanced Analysis Engine
+- **Entity Extraction**: 15+ types including CRYPTO, CVE, ASN, SUBDOMAIN
+- **TTP Mapping**: Automated mapping to MITRE ATT&CK IDs
+- **Sentiment & Relations**: NLP-based relationship extraction
+- **Threat Detection**: Watchlist matching & Anomaly detection
+- **Integrity Verification**: SHA-256 Hashing & Automated tamper detection
 
-### 🎯 Analyst Tools
-- **Notes**: Markdown annotation per entity
-- **Tagging**: Watchlist, Confirmed, Ignore, Reviewed
-- **Pinning**: Fix node positions in graph
-- **PDF Report**: Professional intelligence report export
+### 🎯 Analyst Workbench
+- **Graph Visualization**: Interactive, force-directed graph with TTP styling
+- **Timeline Intelligence**: Temporal analysis of events & entities
+- **Hypothesis Mode**: "What-if" analysis with shadow nodes/edges
+- **Chain of Custody**: Immutable audit logs for all actions
+- **Reporting**: One-click PDF Intelligence Reports
 
-### 🕸️ Graph Visualization
-- Interactive React Flow graph
-- Priority-based node styling (size, color, glow)
-- Relationship edges with dynamic animation
-- Timeline slider for temporal exploration
+### �️ Deployment Ready
+- **Optimized**: Multi-stage Docker builds & .dockerignore
+- **Secure**: JWT Auth, Role-based controls, Tor Proxy support
+- **Scalable**: Redis-backed queuing & caching
 
 ---
 
@@ -154,12 +153,24 @@ docker-compose exec analysis python src/migrate_db.py
 | POST | `/api/investigations` | Create investigation |
 | GET | `/api/investigations/:id` | Get investigation details |
 
-### Graph & Analysis
+### Graph & Intelligence
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/graph` | Get all entities + insights |
+| GET | `/api/investigations/:id/timeline` | Get temporal event data |
 | PATCH | `/api/entities/:type/:value` | Update entity metadata |
-| POST | `/api/report/generate` | Generate PDF report |
+
+### Reports & Compliance
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/investigations/:id/report` | Generate PDF report |
+| GET | `/api/investigations/:id/audit` | Get Chain of Custody logs |
+| POST | `/api/admin/verify-integrity` | Run system-wide integrity check |
+
+### Real-time Alerts
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/alerts/stream` | SSE stream for real-time alerts |
 
 ---
 

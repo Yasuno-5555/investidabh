@@ -648,13 +648,13 @@ export function buildApp(): FastifyInstance {
             });
 
             // Send initial heartbeat
-            reply.raw.write(`data: ${JSON.stringify({ type: 'HEARTBEAT', time: Date.now() })}\n\n`);
+            reply.raw.write(`event: ping\ndata: {}\n\n`);
 
-            // Create dedicated Redis subscriber for this connection or reuse global? 
-            // Better to have one global subscriber for the app and fan-out, but for simplicity here we can reuse or make new.
-            // Actually, 'redis' instance is for commands. We need a subscriber instance.
-            // We can reuse the one from `buildApp` if we separate them, but standard redis client in 'ioredis' can't be both SUB and CMD.
-            // So we create a new one.
+            // Heartbeat Interval (30s)
+            const heartbeat = setInterval(() => {
+                reply.raw.write(`event: ping\ndata: {}\n\n`);
+            }, 30000);
+
             const sub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
             sub.subscribe('alerts', (err) => {
@@ -666,15 +666,237 @@ export function buildApp(): FastifyInstance {
 
             sub.on('message', (channel, message) => {
                 if (channel === 'alerts') {
-                    // Forward to client
-                    reply.raw.write(`data: ${message}\n\n`);
+                    // Forward to client with event: alert
+                    // We assume message is a JSON string
+                    reply.raw.write(`event: alert\ndata: ${message}\n\n`);
                 }
             });
 
             // Cleanup on close
             request.raw.on('close', () => {
+                clearInterval(heartbeat);
                 sub.disconnect();
             });
+        });
+
+        // --- [Phase 33] Timeline Intelligence API ---
+        app.get('/api/investigations/:id/timeline', {
+            onRequest: [app.authenticate]
+        }, async (request, reply) => {
+            const { id } = request.params as { id: string };
+            const user = request.user as { id: string };
+
+            try {
+                // Verify ownership
+                const invResult = await pool.query(
+                    "SELECT created_at FROM investigations WHERE id = $1 AND user_id = $2",
+                    [id, user.id]
+                );
+
+                if (invResult.rowCount === 0) {
+                    return reply.status(404).send({ error: "Investigation not found" });
+                }
+
+                const investigationStart = new Date(invResult.rows[0].created_at);
+
+                // Fetch Intelligence with Timestamps
+                const intelResult = await pool.query(
+                    "SELECT type, value, created_at, metadata FROM intelligence WHERE investigation_id = $1 ORDER BY created_at ASC",
+                    [id]
+                );
+
+                // Transform to Timeline Events
+                // Bucketize or Stream? Stream is better for frontend flexibility.
+                const events = intelResult.rows.map((row: any) => {
+                    let eventType = 'ENTITY_FOUND';
+                    let severity = 'info';
+
+                    // Check for TTPs
+                    if (row.metadata?.ttps?.length > 0) {
+                        eventType = 'TTP_DETECTED';
+                        severity = 'critical';
+                    } else if (row.metadata?.is_watchlist) {
+                        eventType = 'WATCHLIST_MATCH';
+                        severity = 'high';
+                    }
+
+                    return {
+                        time: row.created_at,
+                        type: eventType,
+                        label: `${row.type}: ${row.value}`,
+                        severity: severity,
+                        details: row.metadata
+                    };
+                });
+
+                // Add Investigation Start Event
+                events.unshift({
+                    time: investigationStart.toISOString(),
+                    type: 'INVESTIGATION_START',
+                    label: 'Investigation Started',
+                    severity: 'info',
+                    details: {}
+                });
+
+                return {
+                    start_time: investigationStart.toISOString(),
+                    item_count: events.length,
+                    events: events
+                };
+
+            } catch (err) {
+                app.log.error({ msg: 'Timeline fetch failed', err: err instanceof Error ? err.message : err });
+                return reply.status(500).send({ error: "Timeline fetch failed" });
+            }
+        });
+
+        // Helper: Audit Logging
+        const logAudit = async (userId: string, action: string, resourceType: string, resourceId: string, details: object = {}) => {
+            try {
+                await pool.query(
+                    "INSERT INTO audit_logs (user_id, action, resource_type, resource_id, details) VALUES ($1, $2, $3, $4, $5)",
+                    [userId, action, resourceType, resourceId, JSON.stringify(details)]
+                );
+            } catch (err) {
+                app.log.error({ msg: "Audit log failed", err: err instanceof Error ? err.message : err });
+            }
+        };
+
+        // --- [Phase 34] Report Export API ---
+        app.get('/api/investigations/:id/report', {
+            onRequest: [app.authenticate]
+        }, async (request, reply) => {
+            const { id } = request.params as { id: string };
+            const user = request.user as { id: string };
+
+            // [Phase 35] Audit Log
+            await logAudit(user.id, 'EXPORT_REPORT', 'INVESTIGATION', id, { format: 'PDF' });
+
+            try {
+                // 1. Fetch Data
+                const invResult = await pool.query(
+                    "SELECT target_url, created_at, status FROM investigations WHERE id = $1 AND user_id = $2",
+                    [id, user.id]
+                );
+                if (invResult.rowCount === 0) return reply.status(404).send({ error: "Investigation not found" });
+                const investigation = invResult.rows[0];
+
+                const intelRows = await pool.query(`
+                    SELECT type, value, created_at, score, metadata, text_content
+                    FROM intelligence 
+                    WHERE investigation_id = $1 
+                    ORDER BY score DESC, created_at ASC
+                `, [id]);
+
+                const allEntities = intelRows.rows;
+                const highPriority = allEntities.filter(e => e.score >= 70);
+                const ttpEntities = allEntities.filter(e => e.metadata?.ttps?.length > 0);
+
+                // Collect Unique TTPs
+                const ttpSet = new Set<string>();
+                ttpEntities.forEach(e => {
+                    e.metadata.ttps.forEach((t: string) => ttpSet.add(t));
+                });
+
+                // 2. Setup PDF Stream
+                const PDFDocument = require('pdfkit');
+                const doc = new PDFDocument({ margin: 50 });
+
+                reply.raw.writeHead(200, {
+                    'Content-Type': 'application/pdf',
+                    'Content-Disposition': `attachment; filename=investidubh-report-${id}-${new Date().toISOString().split('T')[0]}.pdf`
+                });
+
+                doc.pipe(reply.raw);
+
+                // --- HEADER ---
+                doc.fontSize(10).fillColor('red').text('CONFIDENTIAL – INVESTIGATIVE INTELLIGENCE', { align: 'center' });
+                doc.fontSize(8).fillColor('grey').text('Not for public disclosure', { align: 'center' });
+                doc.moveDown(2);
+
+                // --- TITLE ---
+                doc.fontSize(24).fillColor('black').text('Investigation Report');
+                doc.fontSize(12).text(`Target: ${investigation.target_url}`);
+                doc.text(`Investigation ID: ${id}`);
+                doc.text(`Date: ${new Date().toLocaleString()}`);
+                doc.moveDown(2);
+
+                // --- EXECUTIVE SUMMARY ---
+                doc.fontSize(16).text('Executive Summary');
+                doc.rect(doc.x, doc.y, 500, 2).fill('black'); // HR
+                doc.moveDown(1);
+
+                doc.fontSize(12).fillColor('black')
+                    .text(`This report summarizes intelligence gathered for target ${investigation.target_url}.`)
+                    .moveDown(0.5);
+
+                doc.text(`• Investigation Status: ${investigation.status}`);
+                doc.text(`• Total Entities Found: ${allEntities.length}`);
+                doc.text(`• High Severity Entities: ${highPriority.length}`, {
+                    stroke: highPriority.length > 0 ? true : false,
+                    fillColor: highPriority.length > 0 ? 'red' : 'black'
+                });
+
+                if (ttpSet.size > 0) {
+                    doc.moveDown(0.5);
+                    doc.text(`• Detected Adversary Techniques: ${Array.from(ttpSet).slice(0, 3).join(', ')}`);
+                }
+                doc.moveDown(2);
+
+                // --- DETECTED TTPs ---
+                if (ttpSet.size > 0) {
+                    doc.fontSize(16).fillColor('black').text('Detected Adversary Techniques (MITRE ATT&CK)');
+                    doc.rect(doc.x, doc.y, 500, 2).fill('black'); // HR
+                    doc.moveDown(1);
+
+                    Array.from(ttpSet).forEach(ttp => {
+                        doc.fontSize(12).fillColor('red').text(`• ${ttp}`);
+                    });
+                    doc.moveDown(2);
+                }
+
+                // --- TOP ENTITIES ---
+                if (highPriority.length > 0) {
+                    doc.addPage();
+                    doc.fontSize(16).fillColor('black').text('Key Intelligence Findings (Score > 70)');
+                    doc.rect(doc.x, doc.y, 500, 2).fill('black'); // HR
+                    doc.moveDown(1);
+
+                    highPriority.forEach((entity, idx) => {
+                        if (doc.y > 650) { doc.addPage(); } // Page break
+
+                        doc.fontSize(12).fillColor('black').text(`${idx + 1}. ${entity.value} [${entity.type}]`, { underline: true });
+                        doc.fontSize(10).fillColor('grey').text(`   Score: ${entity.score}/100 | Found: ${new Date(entity.created_at).toLocaleString()}`);
+
+                        if (entity.metadata?.ttps?.length > 0) {
+                            doc.fillColor('red').text(`   TTPs: ${entity.metadata.ttps.join(', ')}`);
+                        }
+
+                        if (entity.metadata?.notes) {
+                            doc.fillColor('blue').text(`   Analyst Note: ${entity.metadata.notes}`);
+                        }
+
+                        // WHOIS Summary
+                        if (entity.metadata?.whois) {
+                            const w = entity.metadata.whois;
+                            doc.fillColor('black').text(`   WHOIS: Reg=${w.registrar}, Org=${w.org}, Created=${w.creation_date}`);
+                        }
+
+                        doc.moveDown(1);
+                    });
+                } else {
+                    doc.text("No high priority entities found.");
+                }
+
+                // --- FOOTER ---
+                doc.fontSize(8).fillColor('grey').text('Generated by Investidubh OSINT Platform', 50, 700, { align: 'center', width: 500 });
+
+                doc.end();
+
+            } catch (err) {
+                app.log.error({ msg: 'Report generation failed', err: err instanceof Error ? err.message : err });
+                return reply.status(500).send({ error: "Report generation failed" });
+            }
         });
 
         app.get('/api/graph', {
@@ -682,22 +904,13 @@ export function buildApp(): FastifyInstance {
         }, async (request, reply) => {
             const user = request.user as { id: string };
 
-            try {
-                // Fetch investigations (Strict Owner)
-                const invRows = await pool.query(
-                    "SELECT id, target_url FROM investigations WHERE user_id = $1",
-                    [user.id]
-                );
+            // [Phase 35] Audit Log (General Graph Access)
+            // Ideally we'd log specific investigation access if filtered, but global view counts too.
+            await logAudit(user.id, 'VIEW_GRAPH', 'SYSTEM', 'GLOBAL_GRAPH', {});
 
-                // Fetch intelligence (Strict Owner via JOIN)
-                const intelRows = await pool.query(`
-                SELECT i.id, i.investigation_id, i.type, i.value, i.normalized_value, i.created_at, i.confidence, i.score, i.sentiment_score, i.metadata, i.source_type
-                FROM intelligence i
-                JOIN investigations inv ON i.investigation_id = inv.id
-                WHERE inv.user_id = $1 AND i.normalized_value IS NOT NULL
-                ORDER BY i.created_at DESC
-                LIMIT 2000
-            `, [user.id]);
+            try {
+                // 1. Get Investigations for Userict Owner)
+                `, [user.id]);
 
                 const nodes: any[] = [];
                 const edges: any[] = [];
@@ -718,7 +931,7 @@ export function buildApp(): FastifyInstance {
                 const entityStats = new Map<string, EntityStats>();
 
                 intelRows.rows.forEach((item: any) => {
-                    const entId = `ent-${item.type}-${item.normalized_value}`;
+                    const entId = `ent - ${ item.type } -${ item.normalized_value } `;
 
                     const currentDate = new Date(item.created_at || Date.now());
 
@@ -754,7 +967,7 @@ export function buildApp(): FastifyInstance {
 
                 invRows.rows.forEach((inv: any) => {
                     nodes.push({
-                        id: `inv-${inv.id}`,
+                        id: `inv - ${ inv.id } `,
                         type: 'input',
                         data: { label: inv.target_url },
                         position: { x: 0, y: 0 },
@@ -798,6 +1011,20 @@ export function buildApp(): FastifyInstance {
                     // --- Phase 27: Priority Score 2.0 ---
                     const relationsCount = (stats.metadata?.relations?.length || 0);
                     const degree = relationsCount + stats.investigation_ids.size;
+
+                    nodes.push({
+                        id: entityId,
+                        type: 'default',
+                        data: {
+                            label: `${ stats.type }: ${ stats.value } `,
+                            type: stats.type,
+                            value: stats.value,
+                            metadata: stats.metadata,
+                            stats: stats,
+                            timestamp: stats.first_seen.toISOString()
+                        },
+                        // ...
+                    });
                     const degreeScore = Math.min(100, 10 + Math.log2(Math.max(1, degree)) * 20);
 
                     const freqScore = Math.min(100, stats.frequency * 3);
@@ -844,8 +1071,8 @@ export function buildApp(): FastifyInstance {
                     // Edges
                     stats.investigation_ids.forEach((invId: string) => {
                         edges.push({
-                            id: `e-${invId}-${entityId}`,
-                            source: `inv-${invId}`,
+                            id: `e - ${ invId } -${ entityId } `,
+                            source: `inv - ${ invId } `,
                             target: entityId,
                             animated: priorityScore >= 50,
                             style: { stroke: priorityScore >= 75 ? '#ef4444' : '#94a3b8' }
@@ -922,7 +1149,7 @@ export function buildApp(): FastifyInstance {
 
                 // Count recent activity per entity
                 intelRows.rows.forEach((item: any) => {
-                    const entId = `ent-${item.type}-${item.normalized_value}`;
+                    const entId = `ent - ${ item.type } -${ item.normalized_value } `;
                     const itemDate = new Date(item.created_at || Date.now()).getTime();
 
                     if (!entityPatterns.has(entId)) {
@@ -961,7 +1188,7 @@ export function buildApp(): FastifyInstance {
                             label: pattern.label,
                             type: pattern.type,
                             spike_ratio: pattern.freq7d,
-                            reason: `New entity with ${pattern.freq7d} sightings this week`
+                            reason: `New entity with ${ pattern.freq7d } sightings this week`
                         });
                     } else if (monthlyAvg > 0) {
                         const spikeRatio = pattern.freq7d / monthlyAvg;
@@ -970,7 +1197,7 @@ export function buildApp(): FastifyInstance {
                                 label: pattern.label,
                                 type: pattern.type,
                                 spike_ratio: Math.round(spikeRatio * 10) / 10,
-                                reason: `Frequency spike: ${spikeRatio.toFixed(1)}x normal`
+                                reason: `Frequency spike: ${ spikeRatio.toFixed(1) }x normal`
                             });
 
                             // Mark node as anomaly

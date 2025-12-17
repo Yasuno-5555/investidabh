@@ -1,195 +1,59 @@
 # API Reference
 
+Base URL: `/api`
+Auth: Bearer Token (JWT) required for most endpoints.
+
 ## Authentication
 
-All API endpoints (except `/api/auth/*`) require JWT authentication.
+### `POST /auth/register`
+Create a new user account.
+-   **Body**: `{ "email": "user@example.com", "password": "securepassword" }`
 
-Include token in header:
-```
-Authorization: Bearer <token>
-```
+### `POST /auth/login`
+Authenticate and receive JWT.
+-   **Body**: `{ "email": "...", "password": "..." }`
+-   **Response**: `{ "token": "ey..." }`
 
----
+## Investigations
 
-## Auth Endpoints
+### `GET /investigations`
+List all investigations for the current user.
 
-### Register User
-```http
-POST /api/auth/register
-Content-Type: application/json
+### `POST /investigations`
+Start a new investigation.
+-   **Body**: `{ "targetUrl": "https://example.com", "name": "Optional Name" }`
 
-{
-  "username": "analyst",
-  "password": "secure123"
-}
-```
+### `GET /investigations/:id`
+Get summary details of a specific investigation.
 
-**Response:**
-```json
-{
-  "id": "uuid",
-  "username": "analyst"
-}
-```
+### `GET /investigations/:id/report`
+**[New]** Generate and download a PDF intelligence report.
+-   **Response**: `application/pdf` binary stream.
 
-### Login
-```http
-POST /api/auth/login
-Content-Type: application/json
+### `GET /investigations/:id/audit`
+**[New]** Retrieve chain of custody audit logs for this investigation.
+-   **Response**: `[ { "action": "VIEW_GRAPH", "timestamp": "...", "user_id": "..." }, ... ]`
 
-{
-  "username": "analyst",
-  "password": "secure123"
-}
-```
+### `GET /investigations/:id/timeline`
+**[New]** Retrieve aggregated temporal data for timeline visualization.
+-   **Response**: `{ "events": [...], "buckets": [...] }`
 
-**Response:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
+## Intelligence & Graph
 
----
+### `GET /graph`
+Retrieve the complete node/edge graph for the dashboard.
+-   **Query Params**: `investigationId` (optional filter)
+-   **Response**: React Flow compatible `{ nodes: [...], edges: [...], insights: {...} }`
 
-## Investigation Endpoints
+### `PATCH /entities/:type/:value`
+Update metadata for a specific entity (e.g., adding notes or tags).
+-   **Body**: `{ "notes": "...", "tags": ["watchlist", "suspect"] }`
 
-### List Investigations
-```http
-GET /api/investigations
-Authorization: Bearer <token>
-```
+## Admin & System
 
-### Create Investigation
-```http
-POST /api/investigations
-Authorization: Bearer <token>
-Content-Type: application/json
+### `GET /alerts/stream`
+**[New]** Server-Sent Events (SSE) endpoint for real-time alerts.
 
-{
-  "target_url": "https://example.com"
-}
-```
-
-### Get Investigation
-```http
-GET /api/investigations/:id
-Authorization: Bearer <token>
-```
-
-### Delete Investigation
-```http
-DELETE /api/investigations/:id
-Authorization: Bearer <token>
-```
-
----
-
-## Graph & Analysis
-
-### Get Graph Data
-```http
-GET /api/graph
-Authorization: Bearer <token>
-```
-
-**Response:**
-```json
-{
-  "nodes": [
-    {
-      "id": "ent-person-john",
-      "data": {
-        "label": "John Smith",
-        "type": "person",
-        "stats": {
-          "frequency": 5,
-          "first_seen": "2024-01-01T00:00:00Z",
-          "last_seen": "2024-12-15T00:00:00Z",
-          "aging_category": "FRESH"
-        },
-        "priority": {
-          "score": 75,
-          "level": "high",
-          "breakdown": {
-            "degree": 70,
-            "frequency": 50,
-            "cross_investigation": 100,
-            "sentiment": 60,
-            "freshness": 100
-          }
-        }
-      }
-    }
-  ],
-  "edges": [...],
-  "insights": {
-    "top_entities": [...],
-    "anomalies": [...],
-    "stats": {
-      "total_nodes": 45,
-      "avg_priority": 42
-    }
-  }
-}
-```
-
-### Update Entity Metadata
-```http
-PATCH /api/entities/:entityType/:entityValue
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "notes": "Confirmed threat actor",
-  "tags": ["watchlist", "confirmed"],
-  "pinned": true,
-  "pinned_position": { "x": 100, "y": 200 }
-}
-```
-
----
-
-## Reports
-
-### Generate PDF Report
-```http
-POST /api/report/generate
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "investigation_id": "uuid",
-  "graph_image": "data:image/png;base64,..."
-}
-```
-
-**Response:** `application/pdf` binary
-
----
-
-## Search
-
-### Full-Text Search
-```http
-GET /api/search?q=example
-Authorization: Bearer <token>
-```
-
----
-
-## Error Responses
-
-```json
-{
-  "error": "Error message",
-  "code": "ERROR_CODE",
-  "details": "Additional info"
-}
-```
-
-| Code | Status | Description |
-|------|--------|-------------|
-| UNAUTHORIZED | 401 | Invalid/missing token |
-| NOT_FOUND | 404 | Resource not found |
-| INTERNAL_ERROR | 500 | Server error |
+### `POST /admin/verify-integrity`
+**[New]** Trigger a system-wide evidence integrity verification.
+-   **Response**: `{ "status": "completed", "scanned": 100, "failures": [] }`

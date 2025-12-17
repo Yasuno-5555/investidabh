@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+.react-flow__container.hypothesis-mode {
+  background-image: radial-gradient(#e9d5ff 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
 :root {
   --background: #f8fafc;
   /* slate-50 */

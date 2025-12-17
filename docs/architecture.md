@@ -1,119 +1,93 @@
-# Investidubh Architecture
+# System Architecture
 
-## System Overview
+## Overview
+Investidubh is a modular, containerized OSINT platform designed for automated intelligence gathering and analysis. It follows a microservices architecture to ensure scalability and separation of concerns.
 
-Investidubh is a microservices-based OSINT platform with the following components:
+## Components
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        FRONTEND                             │
-│                     (Next.js + React Flow)                  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                        GATEWAY                              │
-│                    (Fastify + JWT)                          │
-│  • REST API endpoints                                       │
-│  • Authentication/Authorization                              │
-│  • PDF report generation                                    │
-│  • Graph data aggregation                                   │
-└─────────────────────────────────────────────────────────────┘
-          │                    │                    │
-          ▼                    ▼                    ▼
-┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│    COLLECTOR     │ │    ANALYSIS      │ │     STORAGE      │
-│   (Playwright)   │ │  (spaCy + NLP)   │ │                  │
-│                  │ │                  │ │  PostgreSQL      │
-│  • Web scraping  │ │  • NER           │ │  MinIO           │
-│  • Screenshots   │ │  • Sentiment     │ │  Redis           │
-│  • RSS/SNS/Git   │ │  • Relationships │ │  Meilisearch     │
-└──────────────────┘ └──────────────────┘ └──────────────────┘
-```
+### 1. Gateway Service (`backend/gateway`)
+The entry point for all client interactions.
+-   **Framework**: Fastify (Node.js/TypeScript)
+-   **Responsibilities**:
+    -   **API Layer**: REST endpoints for frontend.
+    -   **Authentication**: JWT issuance and verification.
+    -   **Proxy**: Forwards specific requests to MinIO or other internal services if needed.
+    -   **Reporting**: Generates PDF reports on-demand using `pdfkit`.
+    -   **Real-time Updates**: SSE (Server-Sent Events) for alerts via `/api/alerts/stream`.
+    -   **Chain of Custody**: Logs all critical actions to `audit_logs`.
+
+### 2. Collector Service (`backend/collector`)
+Responsible for fetching external data.
+-   **Framework**: Python (Playwright)
+-   **Responsibilities**:
+    -   **Web Scraping**: Headless browsing to capture HTML and Screenshots.
+    -   **Tor Integration**: Can route traffic through Tor proxy for anonymity.
+    -   **Evidence Preservation**: Hashes (SHA-256) and stores raw artifacts in MinIO.
+
+### 3. Analysis Service (`backend/analysis`)
+The brain of the operation. Processes raw data into intelligence.
+-   **Framework**: Python (AsyncIO)
+-   **Pipeline**:
+    1.  **Extraction**: Regex and pattern matching for basic entities (Email, IP, etc.).
+    2.  **NLP**: spaCy-based Named Entity Recognition (NER) and relationship extraction.
+    3.  **Enrichment**:
+        -   **Network**: WHOIS, DNS resolution.
+        -   **OSINT**: HIBP, External APIs.
+    4.  **TTP Mapping**: Maps text/behaviors to MITRE ATT&CK IDs.
+    5.  **Alerting**: Checks watchlists and newly detected TTPs via `AlertManager`.
+    6.  **Indexing**: Pushes processed data to Meilisearch for full-text search.
+
+### 4. Frontend (`frontend`)
+The user interface.
+-   **Framework**: Next.js (React)
+-   **Features**:
+    -   **Graph View**: Interactive React Flow visualization.
+    -   **Timeline**: Temporal analysis view.
+    -   **Hypothesis Canvas**: "What-if" scenario planning.
+    -   **Dashboards**: Real-time alerts and investigation management.
+
+### 5. Infrastructure
+-   **PostgreSQL**: Primary relational database. Stores User, Investigation, Intelligence, Artifacts, and Audit Logs.
+-   **MinIO**: S3-compatible object storage for large binary blobs (screenshots, HTML).
+-   **Redis**: Message broker (Pub/Sub) for inter-service communication and job queues.
+-   **Meilisearch**: Search engine for instant text queries.
+-   **Tor**: Optional SOCKS5 proxy for anonymization.
 
 ## Data Flow
 
-### Collection Pipeline
-1. User creates Investigation with target URL
-2. Gateway publishes job to Redis queue
-3. Collector picks up job, fetches HTML/screenshot
-4. Artifacts stored in MinIO
-5. Analysis service extracts entities
-6. Entities stored in PostgreSQL, indexed in Meilisearch
+### Collection & Analysis Flow
+1.  **User** submits URL via Frontend.
+2.  **Gateway** creates Investigation ID and publishes `investigation_created` event to **Redis**.
+3.  **Collector** picks up event, scrapes URL, stores artifacts in **MinIO**, saves hash in **Postgres**, and publishes `collection_completed`.
+4.  **Analysis** picks up `collection_completed`:
+    -   Fetches HTML from MinIO.
+    -   Runs Extraction -> NLP -> Enrichment -> TTP Mapping.
+    -   Stores Intelligence in **Postgres**.
+    -   Indexes content in **Meilisearch**.
+    -   checks Watchlists -> publishes `alert` to Redis if match found.
+5.  **Gateway** (subscribed to `alert`) pushes notification to Frontend via SSE.
 
-### Analysis Pipeline
-1. Raw HTML parsed with BeautifulSoup
-2. Text extracted and processed with spaCy
-3. Named entities identified (NER)
-4. Relationships extracted via dependency parsing
-5. Sentiment analyzed with TextBlob
-6. Entity normalization and deduplication
-7. Priority scoring calculated
+### Integrity Verification Flow
+1.  **User/Admin** requests Integrity Check.
+2.  **Gateway** triggers verification job.
+3.  **System** iterates all `artifacts`:
+    -   Fetches blob from **MinIO**.
+    -   Calculates SHA-256.
+    -   Compares with DB hash.
+4.  **Result**: Report generated and logged to `audit_logs`.
 
-### Graph Pipeline
-1. Gateway aggregates entities from PostgreSQL
-2. Temporal stats calculated (first_seen, last_seen, frequency)
-3. Aging category assigned (FRESH/RECENT/STALE/ANCIENT)
-4. Priority Score computed (5 components)
-5. Pattern detection (anomalies, key entities)
-6. Nodes and edges formatted for React Flow
+## schemas
 
-## Database Schema
+### Intelligence Table
+-   `id`: UUID
+-   `type`: ENUM (person, organization, ip, etc.)
+-   `value`: Text (The entity itself)
+-   `metadata`: JSONB (Enrichment data, TTP tags, etc.)
+-   `confidence_score`: Float (0.0 - 1.0)
 
-### Tables
-- `users` — User accounts (id, username, password_hash)
-- `investigations` — Investigation metadata (id, user_id, target_url, status)
-- `artifacts` — Collected evidence (id, investigation_id, type, minio_path)
-- `intelligence` — Extracted entities (id, investigation_id, entity_type, value, metadata)
-
-### Key ENUMs
-- `entity_type_enum`: person, organization, email, domain, ip, phone, subdomain, etc.
-- `source_type_enum`: manual, nlp, regex, external, api
-
-### JSONB Metadata
-The `intelligence.metadata` column stores:
-- `relations`: Extracted relationships
-- `notes`: Analyst annotations
-- `tags`: Classification tags
-- `pinned`: UI pin state
-- `pinned_position`: Graph coordinates
-
-## Priority Score Algorithm
-
-```
-Priority = 0.25×Degree + 0.20×Frequency + 0.25×CrossInv + 0.15×Sentiment + 0.15×Freshness
-```
-
-| Component | Weight | Calculation |
-|-----------|--------|-------------|
-| Degree Centrality | 25% | log₂(edges) × 20 |
-| Frequency | 20% | min(100, sightings × 3) |
-| Cross-Investigation | 25% | (inv_count - 1) × 50 |
-| Negative Sentiment | 15% | 50 - sentiment × 50 |
-| Freshness | 15% | FRESH=100, ANCIENT=0 |
-
-## Pattern Detection
-
-### Frequency Spike
-```
-spike_ratio = freq_7d / monthly_avg
-is_anomaly = spike_ratio > 3 AND freq_7d > 1
-```
-
-### Key Entity
-```
-is_key = priority >= threshold 
-       AND degree >= avg_degree 
-       AND type IN ('person', 'organization')
-```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | — | PostgreSQL connection string |
-| `REDIS_URL` | redis://localhost:6379 | Redis connection |
-| `MINIO_ENDPOINT_HOST` | minio | MinIO host |
-| `MEILI_HOST` | http://meilisearch:7700 | Meilisearch URL |
-| `JWT_SECRET` | — | JWT signing secret |
-| `NEXT_PUBLIC_API_URL` | http://localhost:8080 | Frontend API URL |
+### Artifacts Table
+-   `id`: UUID
+-   `investigation_id`: UUID
+-   `artifact_type`: ENUM (html, screenshot)
+-   `storage_path`: Text (MinIO path)
+-   `hash_sha256`: Varchar(64) (Evidence Integrity)

@@ -96,6 +96,32 @@ async def migrate():
                     """)
                     logger.info("[+] Converted entity_type to ENUM.")
                 
+                # Phase 35: Evidence Integrity
+                # 35.1: hash_sha256 for artifacts
+                await add_column_if_not_exists(cur, 'artifacts', 'hash_sha256', 'VARCHAR(64)')
+
+                # 35.2: audit_logs table
+                await cur.execute("SELECT to_regclass('public.audit_logs');")
+                res = await cur.fetchone()
+                if not res or not res[0]:
+                    logger.info("[*] Creating table 'audit_logs'...")
+                    await cur.execute("""
+                        CREATE TABLE audit_logs (
+                            id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                            user_id UUID,
+                            action VARCHAR(50) NOT NULL,
+                            resource_type VARCHAR(50) NOT NULL,
+                            resource_id VARCHAR(255),
+                            timestamp TIMESTAMPTZ DEFAULT NOW(),
+                            details JSONB DEFAULT '{}'::jsonb
+                        );
+                    """)
+                    await cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);")
+                    await cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit_logs(resource_id);")
+                    logger.info("[+] Table 'audit_logs' created.")
+                else:
+                    logger.info("[-] Table 'audit_logs' already exists.")
+
                 await aconn.commit()
                 logger.info("[+] Migration completed successfully.")
 

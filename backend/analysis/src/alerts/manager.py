@@ -1,5 +1,6 @@
 import logging
 import json
+import datetime
 from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
@@ -20,25 +21,26 @@ class AlertManager:
         for item in items:
             self.watchlist.add(item.lower())
 
-    def check_and_alert(self, entity_type: str, entity_value: str, metadata: Dict[str, Any] = None):
+    def check_and_alert(self, entity_type: str, entity_value: str, investigation_id: str, metadata: Dict[str, Any] = None):
         """
         Check if entity matches watchlist, if so, log/publish alert.
         """
         if entity_value.lower() in self.watchlist:
-            self._trigger_alert(entity_type, entity_value, "Watchlist Match", metadata)
+            self._trigger_alert(entity_type, entity_value, investigation_id, "Watchlist Match", metadata)
             
         # Potentially check enriched data too
         if metadata:
-            # Example: finding 'intercepted' or 'hacked' in metadata keywords
             pass
 
-    def _trigger_alert(self, entity_type: str, entity_value: str, reason: str, metadata: Dict[str, Any]):
+    def _trigger_alert(self, entity_type: str, entity_value: str, investigation_id: str, reason: str, metadata: Dict[str, Any]):
         alert_msg = {
             "type": "ALERT",
+            "investigation_id": investigation_id,
             "entity": entity_value,
             "entity_type": entity_type,
             "reason": reason,
-            "details": metadata
+            "details": metadata,
+            "timestamp": datetime.datetime.now().isoformat()
         }
         logger.warning(f"!!! ALERT TRIGGERED: {reason} for {entity_value} !!!")
         

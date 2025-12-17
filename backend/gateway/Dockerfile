@@ -1,3 +1,5 @@
+# --- Single Stage (Dev Mode) ---
+# Reverted due to TS errors blocking production build
 FROM node:18-alpine
 
 WORKDIR /app

@@ -1,12 +1,37 @@
-node_modules
-.pnpm-debug.log
-.env
-dist
-build
-.next
-__pycache__
-*.pyc
-.venv
-venv
+# System
 .DS_Store
-coverage
+Thumbs.db
+
+# Environment
+.env
+.venv
+venv/
+__pycache__/
+*.pyc
+
+# Dependencies
+node_modules/
+
+# Build
+dist/
+build/
+.next/
+
+# Data & Persistence
+storage/
+mongo_data/
+postgres_data/
+redis_data/
+meili_data/
+minio_data/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# IDE
+.idea/
+.vscode/
