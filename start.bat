@@ -3,10 +3,10 @@ chcp 65001 >nul
 title Investidubh Launcher
 
 echo.
-echo ╔══════════════════════════════════════════════════════════════╗
-echo ║           🔍 INVESTIDUBH - OSINT Platform                    ║
-echo ║                     Launcher v2.0                            ║
-echo ╚══════════════════════════════════════════════════════════════╝
+echo +--------------------------------------------------------------+
+echo ^|           O INVESTIDUBH - OSINT Platform                    ^|
+echo ^|                     Launcher v2.0                            ^|
+echo +--------------------------------------------------------------+
 echo.
 
 :: Check if Docker is running
@@ -14,13 +14,13 @@ echo [1/3] Checking Docker...
 docker info >nul 2>&1
 if %errorlevel% neq 0 (
     echo.
-    echo ❌ Docker is not running!
+    echo X Docker is not running!
     echo    Please start Docker Desktop and try again.
     echo.
     pause
     exit /b 1
 )
-echo      ✓ Docker is running
+echo      - Docker is running
 
 :: Navigate to project directory
 cd /d "%~dp0"
@@ -39,15 +39,15 @@ echo      Opening browser...
 start http://localhost:3000
 
 echo.
-echo ╔══════════════════════════════════════════════════════════════╗
-echo ║  Investidubh starting...                                     ║
-echo ║                                                              ║
-echo ║  Dashboard: http://localhost:3000                            ║
-echo ║  API:       http://localhost:8080                            ║
-echo ║                                                              ║
-echo ║  To stop: Run stop.bat                                       ║
-echo ║  To view logs: Run logs.bat                                  ║
-echo ║  To rebuild: docker-compose up -d --build                    ║
-echo ╚══════════════════════════════════════════════════════════════╝
+echo +--------------------------------------------------------------+
+echo ^|  Investidubh starting...                                     ^|
+echo ^|                                                              ^|
+echo ^|  Dashboard: http://localhost:3000                            ^|
+echo ^|  API:       http://localhost:8080                            ^|
+echo ^|                                                              ^|
+echo ^|  To stop: Run stop.bat                                       ^|
+echo ^|  To view logs: Run logs.bat                                  ^|
+echo ^|  To rebuild: docker-compose up -d --build                    ^|
+echo +--------------------------------------------------------------+
 echo.
 pause

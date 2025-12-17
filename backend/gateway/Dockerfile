@@ -8,7 +8,7 @@ WORKDIR /app
 RUN npm install -g pnpm
 
 # Copy root config
-COPY package.json pnpm-workspace.yaml ./
+COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
 
 # Copy shared packages
 COPY packages ./packages
@@ -20,8 +20,8 @@ COPY backend/gateway ./backend/gateway
 RUN pnpm install
 
 # Build shared packages only
-RUN pnpm --filter @investidubh/ts-types build || true
-RUN pnpm --filter @investidubh/logger build || true
+RUN pnpm --filter @investidubh/ts-types build
+RUN pnpm --filter @investidubh/logger build
 
 # Use dev mode (tsx) to bypass TypeScript compilation issues
 WORKDIR /app/backend/gateway

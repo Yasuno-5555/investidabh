@@ -20,7 +20,30 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 export default function Home() {
     const [url, setUrl] = useState('');
     const [loading, setLoading] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<any[]>([]);
     const router = useRouter();
+
+    // Search Effect
+    useEffect(() => {
+        const delayDebounceFn = setTimeout(async () => {
+            if (searchQuery.length > 2) {
+                const token = localStorage.getItem('token');
+                try {
+                    const res = await axios.get(`${API_URL}/api/search?q=${encodeURIComponent(searchQuery)}`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    setSearchResults(res.data);
+                } catch (err) {
+                    console.error("Search failed", err);
+                }
+            } else {
+                setSearchResults([]);
+            }
+        }, 500);
+
+        return () => clearTimeout(delayDebounceFn);
+    }, [searchQuery]);
 
     // Auth Check
     useEffect(() => {

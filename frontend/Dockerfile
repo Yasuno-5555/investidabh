@@ -5,7 +5,7 @@ WORKDIR /app
 RUN npm install -g pnpm
 
 # Copy root config
-COPY package.json pnpm-workspace.yaml ./
+COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
 
 # Copy shared packages
 COPY packages ./packages
@@ -15,6 +15,10 @@ COPY frontend ./frontend
 
 # Install
 RUN pnpm install
+
+# Build shared packages (Required because dist is ignored in .dockerignore)
+RUN pnpm --filter @investidubh/ts-types build
+RUN pnpm --filter @investidubh/logger build
 
 # Frontend Dev Server
 WORKDIR /app/frontend
