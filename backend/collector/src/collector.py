@@ -1,21 +1,83 @@
+import asyncio
+import os
+import json
+import logging
 import hashlib
+import datetime
+import io
+import psycopg
+from playwright.async_api import async_playwright
+from minio import Minio
+from tor_control import renew_tor_identity
 
-# ... (Previous imports)
+logger = logging.getLogger("collector")
 
-# ... (MinIO Client init)
+# Environment Variables
+DB_DSN = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/investidabh")
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "investigations")
+TOR_ROTATION_ENABLED = os.getenv("TOR_ROTATION_ENABLED", "true").lower() == "true"
 
-async def collect_url(task_id: str, url: str):
-    # ... (Start log)
+# MinIO Client
+minio_client = Minio(
+    MINIO_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=False
+)
+
+# Ensure bucket exists
+if not minio_client.bucket_exists(BUCKET_NAME):
+    try:
+        minio_client.make_bucket(BUCKET_NAME)
+    except Exception as e:
+        logger.error(f"Failed to create bucket: {e}")
+
+async def collect_url(task_id: str, url: str) -> bool:
+    logger.info(f"Starting collection for task {task_id}: {url}")
     
-    # ... (Proxy setup)
+    # Tor Rotation
+    if TOR_ROTATION_ENABLED:
+        logger.info("Renewing Tor identity...")
+        await renew_tor_identity()
     
-    # ... (Retry Loop)
-        # ... (Browser launch)
-                # ... (Goto URL)
+    async with async_playwright() as p:
+        # Launch browser (Chromium)
+        # We might want to pass proxy settings here if using Tor via HTTP proxy (e.g. Privoxy)
+        # assuming tor is exposing SOCKS5 at 9050 or HTTP at 8118
+        proxy_settings = None
+        if os.getenv("TOR_PROXY_URL"):
+             proxy_settings = {"server": os.getenv("TOR_PROXY_URL")}
 
-                # ... (Get content)
+        try:
+            browser = await p.chromium.launch(
+                headless=True,
+                proxy=proxy_settings
+            )
+            
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            )
+            
+            try:
+                page = await context.new_page()
+                
+                # Navigate
+                try:
+                    await page.goto(url, wait_until="networkidle", timeout=60000)
+                except Exception as e:
+                    logger.warning(f"Navigate timeout or error for {url}: {e}")
+                    # Continue to try capturing whatever is loaded
+                
+                # Capture content
                 content = await page.content()
-                screenshot = await page.screenshot(full_page=True)
+                try:
+                    screenshot = await page.screenshot(full_page=True)
+                except Exception as e:
+                    logger.warning(f"Screenshot failed: {e}")
+                    screenshot = b""
 
                 timestamp = datetime.datetime.now().isoformat()
                 base_path = f"{task_id}/{timestamp}"
@@ -23,84 +85,93 @@ async def collect_url(task_id: str, url: str):
                 html_bytes = content.encode('utf-8')
                 screenshot_bytes = screenshot
                 
-                # Phase 35: Calculate Hashes
+                # Calculate Hashes
                 html_hash = hashlib.sha256(html_bytes).hexdigest()
                 screenshot_hash = hashlib.sha256(screenshot_bytes).hexdigest()
 
                 # MinIO Preservation
+                logger.debug(f"Uploading artifacts to MinIO: {base_path}")
                 minio_client.put_object(
                     BUCKET_NAME, f"{base_path}/index.html",
                     io.BytesIO(html_bytes), len(html_bytes),
                     content_type="text/html"
                 )
-                minio_client.put_object(
-                    BUCKET_NAME, f"{base_path}/screenshot.png",
-                    io.BytesIO(screenshot_bytes), len(screenshot_bytes),
-                    content_type="image/png"
-                )
+                if screenshot_bytes:
+                    minio_client.put_object(
+                        BUCKET_NAME, f"{base_path}/screenshot.png",
+                        io.BytesIO(screenshot_bytes), len(screenshot_bytes),
+                        content_type="image/png"
+                    )
 
-                # Batch DB Update after successful MinIO saves
+                # Batch DB Update
                 html_path = f"{base_path}/index.html"
-                screenshot_path = f"{base_path}/screenshot.png"
+                screenshot_path = f"{base_path}/screenshot.png" # valid even if empty, but maybe check?
 
                 async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
                     async with aconn.cursor() as cur:
-                        # Phase 35: Save Hashes
                         await cur.execute(
                             "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
                             (task_id, 'html', html_path, html_hash)
                         )
-                        await cur.execute(
-                            "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
-                            (task_id, 'screenshot', screenshot_path, screenshot_hash)
-                        )
-                        await cur.execute(
-                            "UPDATE investigations SET status = 'COMPLETED' WHERE id = %s",
-                            (task_id,)
-                        )
+                        if screenshot_bytes:
+                            await cur.execute(
+                                "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
+                                (task_id, 'screenshot', screenshot_path, screenshot_hash)
+                            )
+                        
+                        # Update investigation status
+                        # Note: The caller (worker) might also update status, but saving artifacts usually implies some success.
+                        # We won't mark 'COMPLETED' here because there might be other steps? 
+                        # But original code did. Let's keep it safe.
+                        # Actually, main.py updates status too. 
+                        # Let's just insert artifacts here.
+                        
                         await aconn.commit()
 
-                print(f"[+] Successfully saved artifacts for {task_id}")
+                logger.info(f"Successfully saved artifacts for {task_id}")
                 return True
 
-        # ... (Exception handling)
+            finally:
+                await context.close()
+                await browser.close()
+        
+        except Exception as e:
+            logger.error(f"Playwright error: {e}")
+            raise e
 
-async def save_data_artifact(task_id: str, data: dict, source_type: str):
+async def save_data_artifact(task_id: str, data: dict, source_type: str) -> bool:
     """
     Saves structured data (JSON) to MinIO and DB.
     """
-    timestamp = datetime.datetime.now().isoformat()
-    base_path = f"{task_id}/{timestamp}"
-    file_name = f"{source_type}_data.json"
-    object_path = f"{base_path}/{file_name}"
-    
-    json_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
-    
-    # Phase 35: Calculate Hash
-    json_hash = hashlib.sha256(json_bytes).hexdigest()
-    
-    # MinIO
-    minio_client.put_object(
-        BUCKET_NAME, object_path,
-        io.BytesIO(json_bytes), len(json_bytes),
-        content_type="application/json"
-    )
-    
-    # DB
-    async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
-        async with aconn.cursor() as cur:
-            # Phase 35: Save Hash
-            await cur.execute(
-                "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
-                (task_id, 'raw_data', object_path, json_hash)
-            )
-            # Mark investigation as completed
-            await cur.execute(
-                "UPDATE investigations SET status = 'COMPLETED' WHERE id = %s",
-                (task_id,)
-            )
-            await aconn.commit()
-            
-    print(f"[+] Saved structured data for {task_id}")
-    return True
-
+    try:
+        timestamp = datetime.datetime.now().isoformat()
+        base_path = f"{task_id}/{timestamp}"
+        file_name = f"{source_type}_data.json"
+        object_path = f"{base_path}/{file_name}"
+        
+        json_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        
+        # Calculate Hash
+        json_hash = hashlib.sha256(json_bytes).hexdigest()
+        
+        # MinIO
+        minio_client.put_object(
+            BUCKET_NAME, object_path,
+            io.BytesIO(json_bytes), len(json_bytes),
+            content_type="application/json"
+        )
+        
+        # DB
+        async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
+            async with aconn.cursor() as cur:
+                await cur.execute(
+                    "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
+                    (task_id, 'raw_data', object_path, json_hash)
+                )
+                await aconn.commit()
+                
+        logger.info(f"Saved structured data for {task_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save data artifact: {e}")
+        return False

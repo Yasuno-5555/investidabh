@@ -96,11 +96,26 @@ export function buildApp(): FastifyInstance {
     // Login
     app.post('/api/auth/login', async (request, reply) => {
         const { username, password } = request.body as any;
+        app.log.info({ msg: 'Login attempt', username });
 
         const res = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
         const user = res.rows[0];
 
-        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+        if (!user) {
+            app.log.warn({ msg: 'Login failed: User not found', username });
+            return reply.status(401).send({ message: "Invalid credentials" });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password_hash);
+        app.log.info({
+            msg: 'Password check',
+            username,
+            hashLength: user.password_hash?.length,
+            isMatch
+        });
+
+        if (!isMatch) {
+            app.log.warn({ msg: 'Login failed: Password mismatch', username });
             return reply.status(401).send({ message: "Invalid credentials" });
         }
 
@@ -627,646 +642,127 @@ export function buildApp(): FastifyInstance {
         }
     });
 
-    // Graph Analysis API
-    app.get('/api/graph', {
+
+    // --- [Phase 32] Real-time Alerts Stream (SSE) ---
+    app.get('/api/alerts/stream', {
+        onRequest: [app.authenticate]
+    }, (request, reply) => {
+        // Manual SSE Headers
+        reply.raw.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*' // Adjust for prod
+        });
+
+        // Send initial heartbeat
+        reply.raw.write(`event: ping\ndata: {}\n\n`);
+
+        // Heartbeat Interval (30s)
+        const heartbeat = setInterval(() => {
+            reply.raw.write(`event: ping\ndata: {}\n\n`);
+        }, 30000);
+
+        const sub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+        sub.subscribe('alerts', (err) => {
+            if (err) {
+                request.log.error(`Failed to subscribe: ${err.message}`);
+                return;
+            }
+        });
+
+        sub.on('message', (channel, message) => {
+            if (channel === 'alerts') {
+                // Forward to client with event: alert
+                // We assume message is a JSON string
+                reply.raw.write(`event: alert\ndata: ${message}\n\n`);
+            }
+        });
+
+        // Cleanup on close
+        request.raw.on('close', () => {
+            clearInterval(heartbeat);
+            sub.disconnect();
+        });
+    });
+
+    // --- [Phase 33] Timeline Intelligence API ---
+    app.get('/api/investigations/:id/timeline', {
         onRequest: [app.authenticate]
     }, async (request, reply) => {
-        // ... (existing code, keeping previous block start) ...
+        const { id } = request.params as { id: string };
         const user = request.user as { id: string };
-        // ...
 
-        // --- [Phase 32] Real-time Alerts Stream (SSE) ---
-        app.get('/api/alerts/stream', {
-            onRequest: [app.authenticate]
-        }, (request, reply) => {
-            // Manual SSE Headers
-            reply.raw.writeHead(200, {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'Access-Control-Allow-Origin': '*' // Adjust for prod
-            });
+        try {
+            // Verify ownership
+            const invResult = await pool.query(
+                "SELECT created_at FROM investigations WHERE id = $1 AND user_id = $2",
+                [id, user.id]
+            );
 
-            // Send initial heartbeat
-            reply.raw.write(`event: ping\ndata: {}\n\n`);
+            if (invResult.rowCount === 0) {
+                return reply.status(404).send({ error: "Investigation not found" });
+            }
 
-            // Heartbeat Interval (30s)
-            const heartbeat = setInterval(() => {
-                reply.raw.write(`event: ping\ndata: {}\n\n`);
-            }, 30000);
+            const investigationStart = new Date(invResult.rows[0].created_at);
 
-            const sub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+            // Fetch Intelligence with Timestamps
+            const intelResult = await pool.query(
+                "SELECT type, value, created_at, metadata FROM intelligence WHERE investigation_id = $1 ORDER BY created_at ASC",
+                [id]
+            );
 
-            sub.subscribe('alerts', (err) => {
-                if (err) {
-                    request.log.error(`Failed to subscribe: ${err.message}`);
-                    return;
+            // Transform to Timeline Events
+            // Bucketize or Stream? Stream is better for frontend flexibility.
+            const events = intelResult.rows.map((row: any) => {
+                let eventType = 'ENTITY_FOUND';
+                let severity = 'info';
+
+                // Check for TTPs
+                if (row.metadata?.ttps?.length > 0) {
+                    eventType = 'TTP_DETECTED';
+                    severity = 'critical';
+                } else if (row.metadata?.is_watchlist) {
+                    eventType = 'WATCHLIST_MATCH';
+                    severity = 'high';
                 }
-            });
-
-            sub.on('message', (channel, message) => {
-                if (channel === 'alerts') {
-                    // Forward to client with event: alert
-                    // We assume message is a JSON string
-                    reply.raw.write(`event: alert\ndata: ${message}\n\n`);
-                }
-            });
-
-            // Cleanup on close
-            request.raw.on('close', () => {
-                clearInterval(heartbeat);
-                sub.disconnect();
-            });
-        });
-
-        // --- [Phase 33] Timeline Intelligence API ---
-        app.get('/api/investigations/:id/timeline', {
-            onRequest: [app.authenticate]
-        }, async (request, reply) => {
-            const { id } = request.params as { id: string };
-            const user = request.user as { id: string };
-
-            try {
-                // Verify ownership
-                const invResult = await pool.query(
-                    "SELECT created_at FROM investigations WHERE id = $1 AND user_id = $2",
-                    [id, user.id]
-                );
-
-                if (invResult.rowCount === 0) {
-                    return reply.status(404).send({ error: "Investigation not found" });
-                }
-
-                const investigationStart = new Date(invResult.rows[0].created_at);
-
-                // Fetch Intelligence with Timestamps
-                const intelResult = await pool.query(
-                    "SELECT type, value, created_at, metadata FROM intelligence WHERE investigation_id = $1 ORDER BY created_at ASC",
-                    [id]
-                );
-
-                // Transform to Timeline Events
-                // Bucketize or Stream? Stream is better for frontend flexibility.
-                const events = intelResult.rows.map((row: any) => {
-                    let eventType = 'ENTITY_FOUND';
-                    let severity = 'info';
-
-                    // Check for TTPs
-                    if (row.metadata?.ttps?.length > 0) {
-                        eventType = 'TTP_DETECTED';
-                        severity = 'critical';
-                    } else if (row.metadata?.is_watchlist) {
-                        eventType = 'WATCHLIST_MATCH';
-                        severity = 'high';
-                    }
-
-                    return {
-                        time: row.created_at,
-                        type: eventType,
-                        label: `${row.type}: ${row.value}`,
-                        severity: severity,
-                        details: row.metadata
-                    };
-                });
-
-                // Add Investigation Start Event
-                events.unshift({
-                    time: investigationStart.toISOString(),
-                    type: 'INVESTIGATION_START',
-                    label: 'Investigation Started',
-                    severity: 'info',
-                    details: {}
-                });
 
                 return {
-                    start_time: investigationStart.toISOString(),
-                    item_count: events.length,
-                    events: events
+                    time: row.created_at,
+                    type: eventType,
+                    label: `${row.type}: ${row.value}`,
+                    severity: severity,
+                    details: row.metadata
                 };
+            });
 
-            } catch (err) {
-                app.log.error({ msg: 'Timeline fetch failed', err: err instanceof Error ? err.message : err });
-                return reply.status(500).send({ error: "Timeline fetch failed" });
-            }
-        });
+            // Add Investigation Start Event
+            events.unshift({
+                time: investigationStart.toISOString(),
+                type: 'INVESTIGATION_START',
+                label: 'Investigation Started',
+                severity: 'info',
+                details: {}
+            });
 
-        // Helper: Audit Logging
-        const logAudit = async (userId: string, action: string, resourceType: string, resourceId: string, details: object = {}) => {
-            try {
-                await pool.query(
-                    "INSERT INTO audit_logs (user_id, action, resource_type, resource_id, details) VALUES ($1, $2, $3, $4, $5)",
-                    [userId, action, resourceType, resourceId, JSON.stringify(details)]
-                );
-            } catch (err) {
-                app.log.error({ msg: "Audit log failed", err: err instanceof Error ? err.message : err });
-            }
-        };
+            return {
+                start_time: investigationStart.toISOString(),
+                item_count: events.length,
+                events: events
+            };
 
-        // --- [Phase 34] Report Export API ---
-        app.get('/api/investigations/:id/report', {
-            onRequest: [app.authenticate]
-        }, async (request, reply) => {
-            const { id } = request.params as { id: string };
-            const user = request.user as { id: string };
+        } catch (err) {
+            app.log.error({ msg: 'Timeline fetch failed', err: err instanceof Error ? err.message : err });
+            return reply.status(500).send({ error: "Timeline fetch failed" });
+        }
+    });
 
-            // [Phase 35] Audit Log
-            await logAudit(user.id, 'EXPORT_REPORT', 'INVESTIGATION', id, { format: 'PDF' });
 
-            try {
-                // 1. Fetch Data
-                const invResult = await pool.query(
-                    "SELECT target_url, created_at, status FROM investigations WHERE id = $1 AND user_id = $2",
-                    [id, user.id]
-                );
-                if (invResult.rowCount === 0) return reply.status(404).send({ error: "Investigation not found" });
-                const investigation = invResult.rows[0];
 
-                const intelRows = await pool.query(`
-                    SELECT type, value, created_at, score, metadata, text_content
-                    FROM intelligence 
-                    WHERE investigation_id = $1 
-                    ORDER BY score DESC, created_at ASC
-                `, [id]);
 
-                const allEntities = intelRows.rows;
-                const highPriority = allEntities.filter(e => e.score >= 70);
-                const ttpEntities = allEntities.filter(e => e.metadata?.ttps?.length > 0);
 
-                // Collect Unique TTPs
-                const ttpSet = new Set<string>();
-                ttpEntities.forEach(e => {
-                    e.metadata.ttps.forEach((t: string) => ttpSet.add(t));
-                });
 
-                // 2. Setup PDF Stream
-                const PDFDocument = require('pdfkit');
-                const doc = new PDFDocument({ margin: 50 });
 
-                reply.raw.writeHead(200, {
-                    'Content-Type': 'application/pdf',
-                    'Content-Disposition': `attachment; filename=investidubh-report-${id}-${new Date().toISOString().split('T')[0]}.pdf`
-                });
-
-                doc.pipe(reply.raw);
-
-                // --- HEADER ---
-                doc.fontSize(10).fillColor('red').text('CONFIDENTIAL – INVESTIGATIVE INTELLIGENCE', { align: 'center' });
-                doc.fontSize(8).fillColor('grey').text('Not for public disclosure', { align: 'center' });
-                doc.moveDown(2);
-
-                // --- TITLE ---
-                doc.fontSize(24).fillColor('black').text('Investigation Report');
-                doc.fontSize(12).text(`Target: ${investigation.target_url}`);
-                doc.text(`Investigation ID: ${id}`);
-                doc.text(`Date: ${new Date().toLocaleString()}`);
-                doc.moveDown(2);
-
-                // --- EXECUTIVE SUMMARY ---
-                doc.fontSize(16).text('Executive Summary');
-                doc.rect(doc.x, doc.y, 500, 2).fill('black'); // HR
-                doc.moveDown(1);
-
-                doc.fontSize(12).fillColor('black')
-                    .text(`This report summarizes intelligence gathered for target ${investigation.target_url}.`)
-                    .moveDown(0.5);
-
-                doc.text(`• Investigation Status: ${investigation.status}`);
-                doc.text(`• Total Entities Found: ${allEntities.length}`);
-                doc.text(`• High Severity Entities: ${highPriority.length}`, {
-                    stroke: highPriority.length > 0 ? true : false,
-                    fillColor: highPriority.length > 0 ? 'red' : 'black'
-                });
-
-                if (ttpSet.size > 0) {
-                    doc.moveDown(0.5);
-                    doc.text(`• Detected Adversary Techniques: ${Array.from(ttpSet).slice(0, 3).join(', ')}`);
-                }
-                doc.moveDown(2);
-
-                // --- DETECTED TTPs ---
-                if (ttpSet.size > 0) {
-                    doc.fontSize(16).fillColor('black').text('Detected Adversary Techniques (MITRE ATT&CK)');
-                    doc.rect(doc.x, doc.y, 500, 2).fill('black'); // HR
-                    doc.moveDown(1);
-
-                    Array.from(ttpSet).forEach(ttp => {
-                        doc.fontSize(12).fillColor('red').text(`• ${ttp}`);
-                    });
-                    doc.moveDown(2);
-                }
-
-                // --- TOP ENTITIES ---
-                if (highPriority.length > 0) {
-                    doc.addPage();
-                    doc.fontSize(16).fillColor('black').text('Key Intelligence Findings (Score > 70)');
-                    doc.rect(doc.x, doc.y, 500, 2).fill('black'); // HR
-                    doc.moveDown(1);
-
-                    highPriority.forEach((entity, idx) => {
-                        if (doc.y > 650) { doc.addPage(); } // Page break
-
-                        doc.fontSize(12).fillColor('black').text(`${idx + 1}. ${entity.value} [${entity.type}]`, { underline: true });
-                        doc.fontSize(10).fillColor('grey').text(`   Score: ${entity.score}/100 | Found: ${new Date(entity.created_at).toLocaleString()}`);
-
-                        if (entity.metadata?.ttps?.length > 0) {
-                            doc.fillColor('red').text(`   TTPs: ${entity.metadata.ttps.join(', ')}`);
-                        }
-
-                        if (entity.metadata?.notes) {
-                            doc.fillColor('blue').text(`   Analyst Note: ${entity.metadata.notes}`);
-                        }
-
-                        // WHOIS Summary
-                        if (entity.metadata?.whois) {
-                            const w = entity.metadata.whois;
-                            doc.fillColor('black').text(`   WHOIS: Reg=${w.registrar}, Org=${w.org}, Created=${w.creation_date}`);
-                        }
-
-                        doc.moveDown(1);
-                    });
-                } else {
-                    doc.text("No high priority entities found.");
-                }
-
-                // --- FOOTER ---
-                doc.fontSize(8).fillColor('grey').text('Generated by Investidubh OSINT Platform', 50, 700, { align: 'center', width: 500 });
-
-                doc.end();
-
-            } catch (err) {
-                app.log.error({ msg: 'Report generation failed', err: err instanceof Error ? err.message : err });
-                return reply.status(500).send({ error: "Report generation failed" });
-            }
-        });
-
-        app.get('/api/graph', {
-            onRequest: [app.authenticate]
-        }, async (request, reply) => {
-            const user = request.user as { id: string };
-
-            // [Phase 35] Audit Log (General Graph Access)
-            // Ideally we'd log specific investigation access if filtered, but global view counts too.
-            await logAudit(user.id, 'VIEW_GRAPH', 'SYSTEM', 'GLOBAL_GRAPH', {});
-
-            try {
-                // 1. Get Investigations for Userict Owner)
-                `, [user.id]);
-
-                const nodes: any[] = [];
-                const edges: any[] = [];
-
-                // Aggregate stats per entity
-                interface EntityStats {
-                    type: string;
-                    value: string;
-                    normalized_value: string;
-                    first_seen: Date;
-                    last_seen: Date;
-                    frequency: number;
-                    sources: Set<string>;
-                    investigation_ids: Set<string>;
-                    metadata: any;
-                }
-
-                const entityStats = new Map<string, EntityStats>();
-
-                intelRows.rows.forEach((item: any) => {
-                    const entId = `ent - ${ item.type } -${ item.normalized_value } `;
-
-                    const currentDate = new Date(item.created_at || Date.now());
-
-                    if (!entityStats.has(entId)) {
-                        entityStats.set(entId, {
-                            type: item.type,
-                            value: item.value,
-                            normalized_value: item.normalized_value,
-                            first_seen: currentDate,
-                            last_seen: currentDate,
-                            frequency: 0,
-                            sources: new Set<string>(),
-                            investigation_ids: new Set<string>(),
-                            metadata: item.metadata || {}
-                        });
-                    }
-
-                    const stats = entityStats.get(entId)!;
-                    stats.frequency += 1;
-                    stats.investigation_ids.add(item.investigation_id);
-                    if (currentDate < stats.first_seen) stats.first_seen = currentDate;
-                    if (currentDate > stats.last_seen) stats.last_seen = currentDate;
-                    if (item.source_type) stats.sources.add(item.source_type);
-
-                    // Merge metadata (simple shallow merge for relations)
-                    if (item.metadata?.relations) {
-                        const existingrels = stats.metadata.relations || [];
-                        const newrels = item.metadata.relations;
-                        // simple concat, ideally dedup
-                        stats.metadata.relations = [...existingrels, ...newrels];
-                    }
-                });
-
-                invRows.rows.forEach((inv: any) => {
-                    nodes.push({
-                        id: `inv - ${ inv.id } `,
-                        type: 'input',
-                        data: { label: inv.target_url },
-                        position: { x: 0, y: 0 },
-                        style: { background: '#2563eb', color: 'white', border: 'none', width: 180, padding: 10, borderRadius: 5 }
-                    });
-                });
-
-                // Color Mapping
-                const colorMap: Record<string, string> = {
-                    ip: '#8b5cf6', // Violet
-                    domain: '#6366f1', // Indigo
-                    subdomain: '#a5b4fc', // Light Indigo
-                    organization: '#f97316', // Orange
-                    person: '#14b8a6', // Teal
-                    location: '#ec4899', // Pink
-
-                    // New Phase 24 Types
-                    email: '#facc15', // Yellow
-                    github_user: '#c084fc', // Purple
-                    github_repo: '#64748b', // Blue Gray
-                    mastodon_account: '#d946ef', // Fuchsia
-                    hashtag: '#f472b6', // Pink
-                    url: '#06b6d4', // Cyan
-                    rss_article: '#84cc16', // Lime
-                    company_product: '#fbbf24', // Amber
-                    position_title: '#94a3b8', // Slate
-                };
-
-                const oneDayMs = 24 * 60 * 60 * 1000;
-                const nowTime = Date.now();
-
-                // Create Nodes from Aggregated Stats
-                entityStats.forEach((stats, entityId) => {
-                    // Determine Aging Category
-                    const diffDays = (nowTime - stats.last_seen.getTime()) / oneDayMs;
-                    let agingCategory = 'ANCIENT';
-                    if (diffDays <= 7) agingCategory = 'FRESH';
-                    else if (diffDays <= 90) agingCategory = 'RECENT';
-                    else if (diffDays <= 365) agingCategory = 'STALE';
-
-                    // --- Phase 27: Priority Score 2.0 ---
-                    const relationsCount = (stats.metadata?.relations?.length || 0);
-                    const degree = relationsCount + stats.investigation_ids.size;
-
-                    nodes.push({
-                        id: entityId,
-                        type: 'default',
-                        data: {
-                            label: `${ stats.type }: ${ stats.value } `,
-                            type: stats.type,
-                            value: stats.value,
-                            metadata: stats.metadata,
-                            stats: stats,
-                            timestamp: stats.first_seen.toISOString()
-                        },
-                        // ...
-                    });
-                    const degreeScore = Math.min(100, 10 + Math.log2(Math.max(1, degree)) * 20);
-
-                    const freqScore = Math.min(100, stats.frequency * 3);
-
-                    const crossInvScore = Math.min(100, (stats.investigation_ids.size - 1) * 50);
-
-                    const sentiment = stats.metadata?.average_sentiment || 0;
-                    const sentimentScore = Math.max(0, Math.min(100, 50 - sentiment * 50));
-
-                    const freshnessMap: Record<string, number> = { 'FRESH': 100, 'RECENT': 70, 'STALE': 30, 'ANCIENT': 0 };
-                    const freshnessScore = freshnessMap[agingCategory] || 0;
-
-                    const priorityScore = Math.round(
-                        0.25 * degreeScore +
-                        0.20 * freqScore +
-                        0.25 * crossInvScore +
-                        0.15 * sentimentScore +
-                        0.15 * freshnessScore
-                    );
-
-                    // Priority-based styling
-                    let priorityLevel = 'low';
-                    let priorityBorder = '2px solid white';
-                    let priorityGlow = 'none';
-
-                    if (priorityScore >= 75) {
-                        priorityLevel = 'high';
-                        priorityBorder = '3px solid #ef4444';
-                        priorityGlow = '0 0 15px rgba(239, 68, 68, 0.6)';
-                    } else if (priorityScore >= 50) {
-                        priorityLevel = 'medium';
-                        priorityBorder = '2px solid #f97316';
-                        priorityGlow = '0 0 8px rgba(249, 115, 22, 0.4)';
-                    }
-
-                    // Override for ANCIENT (reduce glow)
-                    if (agingCategory === 'ANCIENT') {
-                        priorityBorder = '2px dashed #cbd5e1';
-                        priorityGlow = 'none';
-                    }
-
-                    let bgColor = colorMap[stats.type] || '#10b981';
-
-                    // Edges
-                    stats.investigation_ids.forEach((invId: string) => {
-                        edges.push({
-                            id: `e - ${ invId } -${ entityId } `,
-                            source: `inv - ${ invId } `,
-                            target: entityId,
-                            animated: priorityScore >= 50,
-                            style: { stroke: priorityScore >= 75 ? '#ef4444' : '#94a3b8' }
-                        });
-                    });
-
-                    // Node Size based on priority and frequency
-                    const baseSize = 50 + (stats.frequency * 3);
-                    const size = priorityScore >= 75 ? Math.min(baseSize + 20, 140) : Math.min(baseSize, 120);
-                    const isSubdomain = stats.type === 'subdomain';
-
-                    nodes.push({
-                        id: entityId,
-                        data: {
-                            label: stats.value,
-                            type: stats.type,
-                            stats: {
-                                frequency: stats.frequency,
-                                first_seen: stats.first_seen.toISOString(),
-                                last_seen: stats.last_seen.toISOString(),
-                                aging_category: agingCategory,
-                                sources: Array.from(stats.sources)
-                            },
-                            priority: {
-                                score: priorityScore,
-                                level: priorityLevel,
-                                breakdown: {
-                                    degree: Math.round(degreeScore),
-                                    frequency: Math.round(freqScore),
-                                    cross_investigation: Math.round(crossInvScore),
-                                    sentiment: Math.round(sentimentScore),
-                                    freshness: Math.round(freshnessScore)
-                                }
-                            },
-                            metadata: stats.metadata
-                        },
-                        position: { x: 0, y: 0 },
-                        style: {
-                            background: bgColor,
-                            color: 'white',
-                            width: size,
-                            height: size,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            textAlign: 'center',
-                            padding: 10,
-                            borderRadius: isSubdomain ? '4px' : '50%',
-                            border: priorityBorder,
-                            boxShadow: priorityGlow,
-                            opacity: agingCategory === 'ANCIENT' ? 0.4 : (agingCategory === 'STALE' ? 0.7 : 1),
-                            fontSize: isSubdomain ? 10 : 12,
-                            filter: agingCategory === 'ANCIENT' ? 'grayscale(100%)' : (agingCategory === 'STALE' ? 'saturate(50%)' : 'none'),
-                            zIndex: priorityScore >= 75 ? 100 : (priorityScore >= 50 ? 50 : 1)
-                        }
-                    });
-                });
-
-                // --- Phase 29: Pattern Detection (Pseudo-AI) ---
-
-                // Calculate statistics for anomaly detection
-                const sevenDaysAgo = nowTime - (7 * oneDayMs);
-                const thirtyDaysAgo = nowTime - (30 * oneDayMs);
-
-                // Recalculate frequencies for pattern detection
-                const entityPatterns = new Map<string, {
-                    freq7d: number;
-                    freqMonthly: number;
-                    priorityScore: number;
-                    degree: number;
-                    type: string;
-                    label: string;
-                }>();
-
-                // Count recent activity per entity
-                intelRows.rows.forEach((item: any) => {
-                    const entId = `ent - ${ item.type } -${ item.normalized_value } `;
-                    const itemDate = new Date(item.created_at || Date.now()).getTime();
-
-                    if (!entityPatterns.has(entId)) {
-                        const stats = entityStats.get(entId);
-                        entityPatterns.set(entId, {
-                            freq7d: 0,
-                            freqMonthly: 0,
-                            priorityScore: 0,
-                            degree: stats ? stats.investigation_ids.size + (stats.metadata?.relations?.length || 0) : 0,
-                            type: item.type,
-                            label: item.value
-                        });
-                    }
-
-                    const pattern = entityPatterns.get(entId)!;
-                    if (itemDate >= sevenDaysAgo) pattern.freq7d++;
-                    if (itemDate >= thirtyDaysAgo) pattern.freqMonthly++;
-                });
-
-                // Update priority scores from nodes
-                nodes.forEach(node => {
-                    if (entityPatterns.has(node.id)) {
-                        entityPatterns.get(node.id)!.priorityScore = node.data.priority?.score || 0;
-                    }
-                });
-
-                // 1. Anomaly Detection (Frequency Spike)
-                const anomalies: Array<{ label: string; type: string; spike_ratio: number; reason: string }> = [];
-
-                entityPatterns.forEach((pattern, entityId) => {
-                    const monthlyAvg = pattern.freqMonthly / 4; // Approx weekly average from monthly
-
-                    if (monthlyAvg === 0 && pattern.freq7d > 2) {
-                        // New entity with significant activity
-                        anomalies.push({
-                            label: pattern.label,
-                            type: pattern.type,
-                            spike_ratio: pattern.freq7d,
-                            reason: `New entity with ${ pattern.freq7d } sightings this week`
-                        });
-                    } else if (monthlyAvg > 0) {
-                        const spikeRatio = pattern.freq7d / monthlyAvg;
-                        if (spikeRatio > 3 && pattern.freq7d > 1) {
-                            anomalies.push({
-                                label: pattern.label,
-                                type: pattern.type,
-                                spike_ratio: Math.round(spikeRatio * 10) / 10,
-                                reason: `Frequency spike: ${ spikeRatio.toFixed(1) }x normal`
-                            });
-
-                            // Mark node as anomaly
-                            const node = nodes.find(n => n.id === entityId);
-                            if (node) {
-                                node.data.patterns = { is_anomaly: true, spike_ratio: spikeRatio };
-                                node.style.border = '3px solid #dc2626';
-                                node.style.boxShadow = '0 0 20px rgba(220, 38, 38, 0.8)';
-                            }
-                        }
-                    }
-                });
-
-                // 2. Key Entity Identification
-                const allPriorities = Array.from(entityPatterns.values()).map(p => p.priorityScore);
-                const avgPriority = allPriorities.reduce((a, b) => a + b, 0) / (allPriorities.length || 1);
-                const threshold = avgPriority + (100 - avgPriority) * 0.5;
-
-                const allDegrees = Array.from(entityPatterns.values()).map(p => p.degree);
-                const avgDegree = allDegrees.reduce((a, b) => a + b, 0) / (allDegrees.length || 1);
-
-                const topEntities: Array<{ label: string; type: string; priority: number; degree: number }> = [];
-
-                entityPatterns.forEach((pattern, entityId) => {
-                    if (
-                        pattern.priorityScore >= threshold &&
-                        pattern.degree >= avgDegree &&
-                        ['person', 'organization'].includes(pattern.type)
-                    ) {
-                        topEntities.push({
-                            label: pattern.label,
-                            type: pattern.type,
-                            priority: pattern.priorityScore,
-                            degree: pattern.degree
-                        });
-
-                        // Mark node as key entity
-                        const node = nodes.find(n => n.id === entityId);
-                        if (node) {
-                            node.data.patterns = { ...node.data.patterns, is_key_entity: true };
-                            node.style.border = '3px solid #eab308';
-                        }
-                    }
-                });
-
-                // Sort and limit
-                topEntities.sort((a, b) => b.priority - a.priority);
-                anomalies.sort((a, b) => b.spike_ratio - a.spike_ratio);
-
-                return {
-                    nodes,
-                    edges,
-                    insights: {
-                        top_entities: topEntities.slice(0, 5),
-                        anomalies: anomalies.slice(0, 5),
-                        stats: {
-                            total_nodes: nodes.length,
-                            total_edges: edges.length,
-                            avg_priority: Math.round(avgPriority),
-                            avg_degree: Math.round(avgDegree * 10) / 10
-                        }
-                    }
-                };
-
-            } catch (err) {
-                app.log.error({ msg: 'Graph fetch failed', err: err instanceof Error ? err.message : err });
-                return reply.status(500).send({ error: "Graph fetch failed" });
-            }
-        });
-
-        return app;
-    }
+    return app;
+}

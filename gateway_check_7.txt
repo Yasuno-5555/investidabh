@@ -1,0 +1,6 @@
+gateway-1  | 
+gateway-1  | > @investidubh/gateway@0.1.0 dev /app/backend/gateway
+gateway-1  | > tsx watch src/index.ts
+gateway-1  | 
+gateway-1  | {"level":"info","time":"2025-12-18T16:59:38.969Z","pid":34,"hostname":"788a361db571","name":"gateway","msg":"Server listening at http://0.0.0.0:4000"}
+gateway-1  | Gateway listening on port 4000

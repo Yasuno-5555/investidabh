@@ -1,4 +1,4 @@
-import pino from 'pino';
+import { pino } from 'pino';
 
 export const createLogger = (serviceName: string) => {
     return pino({
@@ -6,7 +6,7 @@ export const createLogger = (serviceName: string) => {
         level: process.env.LOG_LEVEL || 'info',
         timestamp: pino.stdTimeFunctions.isoTime,
         formatters: {
-            level: (label) => {
+            level: (label: string) => {
                 return { level: label };
             },
         },

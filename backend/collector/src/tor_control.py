@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,8 @@ async def renew_tor_identity(
         await writer.wait_closed()
 
         # Wait for circuit to stabilize (env dependent)
-        await asyncio.sleep(10)
+        build_time = float(os.getenv("TOR_CIRCUIT_BUILD_TIME", "10.0"))
+        await asyncio.sleep(build_time)
 
         return True
 

@@ -77,18 +77,20 @@ class SNSCollector:
             "platform": "mastodon",
             "query": query,
             "timestamp": datetime.datetime.now().isoformat(),
+            "note": "Skipped due to missing credentials" if not self.mastodon else None,
             "data": results
         }
 
     async def _collect_twitter(self, query: str) -> dict:
-        logger.info(f"Searching Twitter (Stub) for: {query}")
-        # Real Twitter API v2 Free implementation would go here.
-        # For now, return a placeholder to avoid breaking if called.
+        logger.warning(f"Searching Twitter for: {query} - DEPRECATED/BROKEN due to API limits")
+        
+        # User Instruction: "Twitter(X) API is paid/broken. Use x:// scheme or external scraper."
+        # We return a placeholder so the task completes but warns.
         return {
             "source_type": "sns",
             "platform": "twitter",
             "query": query,
             "timestamp": datetime.datetime.now().isoformat(),
-            "note": "Twitter collection not configured or limited.",
+            "note": "Twitter collection is currently disabled due to API restrictions. Please use 'x://' scheme with external tool if available.",
             "data": []
         }

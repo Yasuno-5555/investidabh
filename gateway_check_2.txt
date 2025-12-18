@@ -1,0 +1,24 @@
+gateway-1  | 
+gateway-1  | > @investidubh/gateway@0.1.0 dev /app/backend/gateway
+gateway-1  | > tsx watch src/index.ts
+gateway-1  | 
+gateway-1  | node:internal/process/esm_loader:40
+gateway-1  |       internalBinding('errors').triggerUncaughtException(
+gateway-1  |                                 ^
+gateway-1  | 
+gateway-1  | Error: Transform failed with 1 error:
+gateway-1  | /app/backend/gateway/src/app.ts:934:35: ERROR: Expected ";" but found "ent"
+gateway-1  |     at failureErrorWithLog (/app/node_modules/.pnpm/esbuild@0.27.2/node_modules/esbuild/lib/main.js:1467:15)
+gateway-1  |     at /app/node_modules/.pnpm/esbuild@0.27.2/node_modules/esbuild/lib/main.js:736:50
+gateway-1  |     at responseCallbacks.<computed> (/app/node_modules/.pnpm/esbuild@0.27.2/node_modules/esbuild/lib/main.js:603:9)
+gateway-1  |     at handleIncomingPacket (/app/node_modules/.pnpm/esbuild@0.27.2/node_modules/esbuild/lib/main.js:658:12)
+gateway-1  |     at Socket.readFromStdout (/app/node_modules/.pnpm/esbuild@0.27.2/node_modules/esbuild/lib/main.js:581:7)
+gateway-1  |     at Socket.emit (node:events:517:28)
+gateway-1  |     at addChunk (node:internal/streams/readable:368:12)
+gateway-1  |     at readableAddChunk (node:internal/streams/readable:341:9)
+gateway-1  |     at Readable.push (node:internal/streams/readable:278:10)
+gateway-1  |     at Pipe.onStreamRead (node:internal/stream_base_commons:190:23) {
+gateway-1  |   name: 'TransformError'
+gateway-1  | }
+gateway-1  | 
+gateway-1  | Node.js v18.20.8
