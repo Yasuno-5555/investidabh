@@ -127,6 +127,20 @@ async def worker(
                     
                     if success:
                         logger.info(f"Task {task_id} completed successfully")
+                        
+                        # UPDATE DB STATUS (Missing in original vibe-coding!)
+                        try:
+                             from collector import db_pool
+                             if db_pool:
+                                 async with db_pool.connection() as aconn:
+                                     async with aconn.cursor() as cur:
+                                         await cur.execute(
+                                             "UPDATE investigations SET status = 'COMPLETED', updated_at = NOW() WHERE id = %s",
+                                             (task_id,)
+                                         )
+                        except Exception as dberr:
+                             logger.error(f"Failed to update investigation status: {dberr}")
+
                         await r.publish('events:investigation_completed', json.dumps({
                             'id': task_id,
                             'targetUrl': url,

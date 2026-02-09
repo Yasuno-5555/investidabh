@@ -109,8 +109,10 @@ services:
 
   tor:
     image: osminogin/tor-simple:latest
+    volumes:
+      - ./backend/collector/torrc:/etc/tor/torrc
     environment:
-      - TOR_Log=notice
+      TOR_Log: notice
     ports:
       - "9050:9050"
       - "9051:9051"

@@ -19,8 +19,8 @@ logger = logging.getLogger("collector")
 # Environment Variables
 DB_DSN = os.environ["DATABASE_URL"]
 MINIO_ENDPOINT = os.environ["MINIO_ENDPOINT"]
-MINIO_ACCESS_KEY = os.environ["MINIO_ACCESS_KEY"]
-MINIO_SECRET_KEY = os.environ["MINIO_SECRET_KEY"]
+MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER") or os.getenv("MINIO_ACCESS_KEY") or "admin"
+MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD") or os.getenv("MINIO_SECRET_KEY") or "password"
 BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "investigations")
 TOR_ROTATION_ENABLED = os.getenv("TOR_ROTATION_ENABLED", "true").lower() == "true"
 
@@ -110,9 +110,11 @@ async def collect_url(task_id: str, url: str) -> bool:
     proxy_settings = None
     if TOR_ROTATION_ENABLED:
         logger.info("Renewing Tor identity...")
-        await renew_tor_identity()
+        tor_control_host = os.getenv("TOR_CONTROL_HOST", "tor")
+        tor_control_port = int(os.getenv("TOR_CONTROL_PORT", "9051"))
+        await renew_tor_identity(control_host=tor_control_host, control_port=tor_control_port)
         
-        tor_proxy = os.getenv("TOR_PROXY_URL")
+        tor_proxy = os.getenv("TOR_PROXY_URL") or "socks5://tor:9050"
         # FAIL-CLOSED: If rotation enabled but no proxy config, do not proceed to avoid real IP leak
         if not tor_proxy:
              logger.error("TOR_ROTATION_ENABLED but TOR_PROXY_URL is missing. ABORTING to prevent IP leak.")

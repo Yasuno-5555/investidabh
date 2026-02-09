@@ -1,0 +1,6 @@
+SocksPort 0.0.0.0:9050
+ControlPort 0.0.0.0:9051
+CookieAuthentication 0
+# IMPORTANT: In a production environment, use a HashedControlPassword!
+# For this local "toy", we allow open control port within the internal docker net.
+DataDirectory /var/lib/tor
