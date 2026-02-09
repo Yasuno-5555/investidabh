@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # --- Infrastructure ---
   postgres:
@@ -13,6 +11,11 @@ services:
       - ./storage/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - internal-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-investidubh}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio
@@ -27,6 +30,11 @@ services:
       - "9001:9001"
     networks:
       - internal-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
 
   redis:
     image: redis:alpine
@@ -34,6 +42,11 @@ services:
       - ./storage/redis_data:/data
     networks:
       - internal-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   meilisearch:
     image: getmeili/meilisearch:v1.3
@@ -54,16 +67,18 @@ services:
     ports:
       - "4000:4000"
     environment:
-      - DATABASE_URL=postgres://${DB_USER:-investidubh}:${DB_PASSWORD:-secret}@postgres:5432/investidubh_core
+      - DATABASE_URL=postgresql://${DB_USER:-investidubh}:${DB_PASSWORD:-secret}@postgres:5432/investidubh_core
       - REDIS_URL=redis://redis:6379
-      - MINIO_ENDPOINT_HOST=minio
-      - MINIO_ENDPOINT_PORT=9000
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
       - MINIO_ROOT_USER=${MINIO_USER:-admin}
       - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD:-password}
       - JWT_SECRET=${JWT_SECRET:-super-secret-dev-key}
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - internal-net
       - public-net
@@ -82,9 +97,12 @@ services:
       - TOR_CONTROL_HOST=tor
       - TOR_CONTROL_PORT=9051
     depends_on:
-      - redis
-      - minio
-      - tor
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      tor:
+        condition: service_started
     networks:
       - internal-net
       - tor-net
@@ -108,9 +126,12 @@ services:
       - MINIO_ROOT_USER=${MINIO_USER:-admin}
       - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD:-password}
     depends_on:
-      - redis
-      - minio
-      - postgres
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - internal-net
 
@@ -124,7 +145,8 @@ services:
       - API_URL=http://gateway:4000
       - NEXT_PUBLIC_API_URL=http://localhost:4000 # Browser access
     depends_on:
-      - gateway
+      gateway:
+        condition: service_started
     networks:
       - public-net
 

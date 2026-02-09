@@ -7,3 +7,4 @@ feedparser
 Mastodon.py
 PyGithub
 requests
+psycopg-pool

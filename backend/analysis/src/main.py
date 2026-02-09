@@ -4,6 +4,7 @@ import os
 import redis.asyncio as redis
 import logging
 import sys
+from psycopg_pool import AsyncConnectionPool
 from extractor import extract_and_save
 from indexer import index_content
 from nlp_analyzer import analyze_and_save
@@ -45,7 +46,7 @@ minio_client = Minio(
     secure=False
 )
 
-async def process_enrichment_and_alerts(investigation_id, r_conn):
+async def process_enrichment_and_alerts(investigation_id, r_conn, db_pool):
     """
     Phase 31: Run Enrichment, TTP Mapping, and Alerts.
     Updates intelligence items with new metadata.
@@ -56,7 +57,7 @@ async def process_enrichment_and_alerts(investigation_id, r_conn):
         if not alert_manager.redis:
             alert_manager.redis = r_conn
 
-        async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
+        async with db_pool.connection() as aconn:
             async with aconn.cursor() as cur:
                 # 1. Fetch all entities for this investigation
                 await cur.execute(
@@ -122,6 +123,15 @@ async def process_enrichment_and_alerts(investigation_id, r_conn):
                             metadata={'ttps': new_tags, 'msg': 'TTP Detected'}
                         )
 
+            # Pool connection context manager handles transaction/commit/rollback if configured, 
+            # but usually explicit commit is needed for psycopg 3 unless autocommit.
+            # aconn is yielded from pool.connection() which is an AsyncConnection.
+            # We should commit if we changed data.
+            # In psycopg 3, context manager on connection does NO transaction management by default unless using `transaction()`.
+            # But the previous code used `async with psycopg.connect(DB_DSN) as aconn`, which DOES close/commit?
+            # Actually explicit commit was called.
+            # With `pool.connection()`, we get a connection.
+            # Best practice is `async with pool.connection() as conn: async with conn.cursor() as cur: ... await conn.commit()`
             await aconn.commit()
             
     except Exception as e:
@@ -132,6 +142,12 @@ async def worker():
     # await migrate()
 
     logger.info(f"[*] Analysis Worker started. Connecting to {REDIS_URL}...")
+    
+    # Initialize DB Pool
+    db_pool = AsyncConnectionPool(DB_DSN, open=False)
+    await db_pool.open()
+    logger.info("DB Pool initialized")
+    
     try:
         r = redis.from_url(REDIS_URL)
         pubsub = r.pubsub()
@@ -139,75 +155,84 @@ async def worker():
         logger.info("[-] Subscribed to events:investigation_completed")
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
+        await db_pool.close()
         return
 
-    async for message in pubsub.listen():
-        if message['type'] == 'message':
-            try:
-                data = json.loads(message['data'])
-                logger.info(f"[+] Received event for investigation: {data.get('id')}")
-                
-                investigation_id = data.get('id')
-                target_url = data.get('targetUrl')
-
-                # 1. Run Entity Extraction (Emails, Phones - existing)
-                await extract_and_save(investigation_id, target_url=target_url)
-
-                # 2. Fetch HTML content for Advanced Analysis
-                html_path = None
+    try:
+        async for message in pubsub.listen():
+            if message['type'] == 'message':
                 try:
-                    async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
-                        async with aconn.cursor() as cur:
-                             await cur.execute("SELECT storage_path FROM artifacts WHERE investigation_id = %s AND artifact_type = 'html'", (investigation_id,))
-                             row = await cur.fetchone()
-                             if row:
-                                 html_path = row[0]
+                    data = json.loads(message['data'])
+                    logger.info(f"[+] Received event for investigation: {data.get('id')}")
+                    
+                    investigation_id = data.get('id')
+                    target_url = data.get('targetUrl')
+
+                    # 1. Run Entity Extraction (Emails, Phones - existing)
+                    # NOTE: extract_and_save might still use its own connection logic. 
+                    # Ideally we pass pool, but for now we focus on main flow and nlp.
+                    await extract_and_save(investigation_id, target_url=target_url)
+
+                    # 2. Fetch HTML content for Advanced Analysis
+                    html_path = None
+                    try:
+                        async with db_pool.connection() as aconn:
+                            async with aconn.cursor() as cur:
+                                 await cur.execute("SELECT storage_path FROM artifacts WHERE investigation_id = %s AND artifact_type = 'html'", (investigation_id,))
+                                 row = await cur.fetchone()
+                                 if row:
+                                     html_path = row[0]
+                    except Exception as e:
+                        logger.error(f"DB Error fetching HTML path: {e}")
+
+                    # 3. Analyze Text (NLP - Named Entity Recognition & Sentiment)
+                    if html_path:
+                        try:
+                            # Fetch content from MinIO
+                            # Use asyncio.to_thread for blocking MinIO call
+                            resp = await asyncio.to_thread(minio_client.get_object, BUCKET_NAME, html_path)
+                            
+                            # --- Reliability Fix: Content Size Limit ---
+                            # Read only up to 5MB to prevent OOM
+                            html_content_bytes = resp.read(5 * 1024 * 1024)
+                            if resp.read(1):
+                                 logger.warning(f"Artifact {html_path} exceeds 5MB limit. Truncating for analysis.")
+                            
+                            html_content = html_content_bytes.decode('utf-8', errors='ignore')
+                            resp.close()
+                            resp.release_conn()
+                            
+                            # Extract text from HTML
+                            soup = BeautifulSoup(html_content, 'html.parser')
+                            text = soup.get_text()
+                            
+                            # Analyze - Pass pool
+                            await analyze_and_save(investigation_id, text, db_pool)
+                            
+                        except Exception as e:
+                            logger.error(f"NLP Analysis failed: {e}")
+
+                        # 3.5 Indexing (Meilisearch) - Optimized
+                        try:
+                             # Now index_content is async and non-blocking
+                             await index_content(investigation_id, target_url, html_content)
+                        except Exception as e:
+                             # Indexing failure shouldn't fail the pipeline
+                             logger.warning(f"Indexing failed: {e}")
+                    
+                    # 3.6 Enrichment & Alerts (Phase 31)
+                    await process_enrichment_and_alerts(investigation_id, r, db_pool)
+
+                    # 4. Scoring
+                    await run_scoring(investigation_id)
+                    
+                    logger.info(f"[-] Analysis completed for {investigation_id}")
+
                 except Exception as e:
-                    logger.error(f"DB Error fetching HTML path: {e}")
-
-                        # 3. Analyze Text (NLP - Named Entity Recognition & Sentiment)
-                if html_path:
-                    try:
-                        # Fetch content from MinIO
-                        resp = minio_client.get_object(BUCKET_NAME, html_path)
-                        # --- Reliability Fix: Content Size Limit ---
-                        # Read only up to 5MB to prevent OOM
-                        html_content_bytes = resp.read(5 * 1024 * 1024)
-                        if resp.read(1):
-                             logger.warning(f"Artifact {html_path} exceeds 5MB limit. Truncating for analysis.")
-                        
-                        html_content = html_content_bytes.decode('utf-8', errors='ignore')
-                        resp.close()
-                        resp.release_conn()
-                        
-                        # Extract text from HTML
-                        soup = BeautifulSoup(html_content, 'html.parser')
-                        text = soup.get_text()
-                        
-                        # Analyze
-                        await analyze_and_save(investigation_id, text)
-                        
-                    except Exception as e:
-                        logger.error(f"NLP Analysis failed: {e}")
-
-                    # 3.5 Indexing (Meilisearch) - Optimized
-                    try:
-                         # Now index_content is async and non-blocking
-                         await index_content(investigation_id, target_url, html_content)
-                    except Exception as e:
-                         # Indexing failure shouldn't fail the pipeline
-                         logger.warning(f"Indexing failed: {e}")
-                
-                # 3.6 Enrichment & Alerts (Phase 31)
-                await process_enrichment_and_alerts(investigation_id, r)
-
-                # 4. Scoring
-                await run_scoring(investigation_id)
-                
-                logger.info(f"[-] Analysis completed for {investigation_id}")
-
-            except Exception as e:
-                logger.error(f"Error processing message: {e}")
+                    logger.error(f"Error processing message: {e}")
+    finally:
+        await db_pool.close()
+        logger.info("DB Pool closed")
 
 if __name__ == "__main__":
     asyncio.run(worker())

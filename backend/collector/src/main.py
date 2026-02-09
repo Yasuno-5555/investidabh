@@ -4,7 +4,7 @@ import os
 import redis.asyncio as redis
 import logging
 import sys
-from collector import collect_url, save_data_artifact
+from collector import collect_url, save_data_artifact, init_db_pool, close_db_pool
 
 # Import Collectors
 from collectors.rss_collector import RSSCollector
@@ -40,6 +40,9 @@ async def worker(
     infra_collector: InfraCollector = None
 ):
     logger.info("[*] Collector Worker starting...")
+    
+    # Initialize DB Pool
+    await init_db_pool()
     
     # Initialize Collectors if not provided (DI support)
     try:
@@ -164,11 +167,15 @@ async def worker(
         except Exception as e:
             logger.error(f"Critical error in worker: {e}")
         finally:
+            # Close Redis
             if r:
                 try:
                     await r.close()
                 except:
                     pass
+            # Close DB Pool
+            await close_db_pool()
+            
             await asyncio.sleep(5)  # Wait a bit before reconnecting
 
 if __name__ == "__main__":

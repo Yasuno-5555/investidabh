@@ -3,27 +3,36 @@ import asyncio
 import os
 import psycopg
 import logging
+from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger("analysis.nlp")
 
-# Load model globally to avoid reloading
-try:
-    nlp = spacy.load("en_core_web_sm")
-    logger.info("[-] NLP Model (en_core_web_sm) loaded.")
-except OSError:
-    logger.warning("[!] SpaCy model not found. Downloading...")
-    from spacy.cli import download
-    download("en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+# Lazy Loading Spacy Model
+_nlp_model = None
+
+def get_nlp_model():
+    global _nlp_model
+    if _nlp_model is None:
+        try:
+            logger.info("[-] Loading NLP Model (en_core_web_sm)...")
+            _nlp_model = spacy.load("en_core_web_sm")
+            logger.info("[-] NLP Model loaded.")
+        except OSError:
+            logger.warning("[!] SpaCy model not found. Downloading...")
+            from spacy.cli import download
+            download("en_core_web_sm")
+            _nlp_model = spacy.load("en_core_web_sm")
+    return _nlp_model
 
 DB_DSN = os.getenv("DATABASE_URL", "postgresql://investidubh:secret@localhost:5432/investidubh_core")
 
 TARGET_ENTITIES = ["ORG", "PERSON", "GPE"]
 
-async def analyze_and_save(investigation_id: str, text: str):
+async def analyze_and_save(investigation_id: str, text: str, db_pool: AsyncConnectionPool = None):
     """
     Extract specific entities from text and save to DB.
     Optimized: Non-blocking NLP and Batch DB Inserts.
+    Uses DB Pool if provided.
     """
     if not text:
         return
@@ -32,6 +41,7 @@ async def analyze_and_save(investigation_id: str, text: str):
     loop = asyncio.get_running_loop()
     
     def process_text_sync(txt):
+        nlp = get_nlp_model()
         doc = nlp(txt)
         
         extracted_entities = []
@@ -110,7 +120,13 @@ async def analyze_and_save(investigation_id: str, text: str):
     import json
     
     try:
-        async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
+        # DB Connection Logic - Support Pool or Direct Connect
+        if db_pool:
+             aconn_cm = db_pool.connection()
+        else:
+             aconn_cm = await psycopg.AsyncConnection.connect(DB_DSN)
+
+        async with aconn_cm as aconn:
             async with aconn.cursor() as cur:
                 # Prepare batch data
                 params_list = []
@@ -136,6 +152,10 @@ async def analyze_and_save(investigation_id: str, text: str):
                         """,
                         params_list
                     )
+            
+            # Commit logic: 
+            # If using psycopg_pool connection context manager, it might not commit automatically?
+            # Correct, we must commit explicitly.
             await aconn.commit()
             
     except Exception as e:

@@ -17,3 +17,4 @@ dnspython
 python-whois
 weasyprint
 jinja2
+psycopg-pool

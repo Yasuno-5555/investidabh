@@ -1,4 +1,4 @@
-import asyncio
+
 import os
 import json
 import logging
@@ -9,6 +9,7 @@ import socket
 import ipaddress
 from urllib.parse import urlparse
 import psycopg
+from psycopg_pool import AsyncConnectionPool
 from playwright.async_api import async_playwright
 from minio import Minio
 from tor_control import renew_tor_identity
@@ -30,6 +31,23 @@ minio_client = Minio(
     secret_key=MINIO_SECRET_KEY,
     secure=False
 )
+
+# Global DB Pool
+db_pool: AsyncConnectionPool = None
+
+async def init_db_pool():
+    global db_pool
+    if db_pool is None:
+        db_pool = AsyncConnectionPool(DB_DSN, open=False)
+        await db_pool.open()
+        logger.info("DB Pool initialized")
+
+async def close_db_pool():
+    global db_pool
+    if db_pool:
+        await db_pool.close()
+        db_pool = None
+        logger.info("DB Pool closed")
 
 # Ensure bucket exists
 if not minio_client.bucket_exists(BUCKET_NAME):
@@ -77,6 +95,10 @@ def validate_url(url: str):
 async def collect_url(task_id: str, url: str) -> bool:
     logger.info(f"Starting collection for task {task_id}: {url}")
     
+    if db_pool is None:
+        logger.error("DB Pool not initialized!")
+        return False
+        
     # SSRF Validation
     try:
         validate_url(url)
@@ -142,13 +164,18 @@ async def collect_url(task_id: str, url: str) -> bool:
 
                 # MinIO Preservation
                 logger.debug(f"Uploading artifacts to MinIO: {base_path}")
-                minio_client.put_object(
+                
+                # Async Wrapper for Blocking MinIO
+                await asyncio.to_thread(
+                    minio_client.put_object,
                     BUCKET_NAME, f"{base_path}/index.html",
                     io.BytesIO(html_bytes), len(html_bytes),
                     content_type="text/html"
                 )
+                
                 if screenshot_bytes:
-                    minio_client.put_object(
+                     await asyncio.to_thread(
+                        minio_client.put_object,
                         BUCKET_NAME, f"{base_path}/screenshot.png",
                         io.BytesIO(screenshot_bytes), len(screenshot_bytes),
                         content_type="image/png"
@@ -158,7 +185,7 @@ async def collect_url(task_id: str, url: str) -> bool:
                 html_path = f"{base_path}/index.html"
                 screenshot_path = f"{base_path}/screenshot.png" # valid even if empty, but maybe check?
 
-                async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
+                async with db_pool.connection() as aconn:
                     async with aconn.cursor() as cur:
                         await cur.execute(
                             "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
@@ -169,16 +196,7 @@ async def collect_url(task_id: str, url: str) -> bool:
                                 "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
                                 (task_id, 'screenshot', screenshot_path, screenshot_hash)
                             )
-                        
-                        # Update investigation status
-                        # Note: The caller (worker) might also update status, but saving artifacts usually implies some success.
-                        # We won't mark 'COMPLETED' here because there might be other steps? 
-                        # But original code did. Let's keep it safe.
-                        # Actually, main.py updates status too. 
-                        # Let's just insert artifacts here.
-                        
-                        await aconn.commit()
-
+                
                 logger.info(f"Successfully saved artifacts for {task_id}")
                 return True
 
@@ -195,6 +213,10 @@ async def save_data_artifact(task_id: str, data: dict, source_type: str) -> bool
     Saves structured data (JSON) to MinIO and DB.
     """
     try:
+        if db_pool is None:
+             logger.error("DB Pool not initialized!")
+             return False
+
         timestamp = datetime.datetime.now().isoformat()
         base_path = f"{task_id}/{timestamp}"
         file_name = f"{source_type}_data.json"
@@ -206,23 +228,24 @@ async def save_data_artifact(task_id: str, data: dict, source_type: str) -> bool
         json_hash = hashlib.sha256(json_bytes).hexdigest()
         
         # MinIO
-        minio_client.put_object(
+        await asyncio.to_thread(
+            minio_client.put_object,
             BUCKET_NAME, object_path,
             io.BytesIO(json_bytes), len(json_bytes),
             content_type="application/json"
         )
         
         # DB
-        async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
+        async with db_pool.connection() as aconn:
             async with aconn.cursor() as cur:
                 await cur.execute(
                     "INSERT INTO artifacts (investigation_id, artifact_type, storage_path, hash_sha256) VALUES (%s, %s, %s, %s)",
                     (task_id, 'raw_data', object_path, json_hash)
                 )
-                await aconn.commit()
                 
         logger.info(f"Saved structured data for {task_id}")
         return True
     except Exception as e:
         logger.error(f"Failed to save data artifact: {e}")
         return False
+

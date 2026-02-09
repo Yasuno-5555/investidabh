@@ -32,7 +32,12 @@
 - **Chain of Custody**: Immutable audit logs for all actions
 - **Reporting**: One-click PDF Intelligence Reports
 
-### �️ Deployment Ready
+### 💻 Command Line Interface (CLI)
+- **Headless Operation**: Full feature parity with GUI.
+- **Automation**: Scriptable `scan`, `list`, and `search` commands.
+- **Rich Output**: Formatted tables and JSON output for integration.
+
+### ️ Deployment Ready
 - **Optimized**: Multi-stage Docker builds & .dockerignore
 - **Secure**: JWT Auth, Role-based controls, Tor Proxy support
 - **Scalable**: Redis-backed queuing & caching
@@ -53,21 +58,28 @@
         │PostgreSQL│ │  MinIO   │ │  Redis   │
         │ Metadata │ │  Blobs   │ │  Queue   │
         └──────────┘ └──────────┘ └──────────┘
-              │
-              ▼
+              │           │
+              ▼           ▼
         ┌──────────┐    ┌──────────┐
         │ Analysis │◄──►│Meilisearch│
         │ (Python) │    │  Search   │
         └──────────┘    └──────────┘
+              ▲
+              │
+        ┌──────────┐
+        │   CLI    │
+        │ (Python) │
+        └──────────┘
 ```
 
 ### Services
 | Service | Stack | Purpose |
 |---------|-------|---------|
-| **Gateway** | Node.js + Fastify | API, Auth (JWT), PDF generation |
+| **Gateway** | Node.js + Fastify | API, Auth (JWT), Search, PDF generation |
 | **Collector** | Python + Playwright | Web scraping, evidence preservation |
 | **Analysis** | Python + spaCy | NLP, entity extraction, indexing |
 | **Frontend** | Next.js + React Flow | Dashboard, graph visualization |
+| **CLI** | Python + Click | Terminal-based management & automation |
 
 ### Storage
 | Storage | Purpose |
@@ -83,6 +95,7 @@
 
 ### Prerequisites
 - Docker & Docker Compose
+- Python 3.8+ (for CLI)
 - 4GB+ RAM recommended
 
 ### Installation
@@ -103,8 +116,20 @@ docker-compose up -d --build
 open http://localhost:3000
 ```
 
+### CLI Setup
+```bash
+# Install CLI dependencies
+pip install -r cli/requirements.txt
+
+# Authenticate
+python3 cli/investidubh_cli.py auth login --username admin --password secret
+
+# Verify
+python3 cli/investidubh_cli.py list
+```
+
 ### First Run
-1. Register a new account at `http://localhost:3000/register`
+1. Register a new account at `http://localhost:3000/register` (or use CLI)
 2. Create your first investigation
 3. Enter target URL and start collection
 4. View extracted entities in the Graph tab
@@ -152,6 +177,7 @@ docker-compose exec analysis python src/migrate_db.py
 | GET | `/api/investigations` | List investigations |
 | POST | `/api/investigations` | Create investigation |
 | GET | `/api/investigations/:id` | Get investigation details |
+| GET | `/api/search` | Search investigations & artifacts |
 
 ### Graph & Intelligence
 | Method | Endpoint | Description |
@@ -186,12 +212,13 @@ docker-compose exec analysis python src/migrate_db.py
 ## 📁 Project Structure
 
 ```
-investidabh/
+investidubh/
 ├── backend/
 │   ├── gateway/         # API server (TypeScript)
 │   ├── collector/       # Web scraper (Python)
 │   └── analysis/        # NLP engine (Python)
 ├── frontend/            # Next.js dashboard
+├── cli/                 # CLI Tool (Python)
 ├── packages/
 │   ├── logger/          # Shared logging
 │   └── ts-types/        # TypeScript types
