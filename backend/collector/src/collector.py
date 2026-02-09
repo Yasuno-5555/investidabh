@@ -5,6 +5,9 @@ import logging
 import hashlib
 import datetime
 import io
+import socket
+import ipaddress
+from urllib.parse import urlparse
 import psycopg
 from playwright.async_api import async_playwright
 from minio import Minio
@@ -13,10 +16,10 @@ from tor_control import renew_tor_identity
 logger = logging.getLogger("collector")
 
 # Environment Variables
-DB_DSN = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/investidabh")
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+DB_DSN = os.environ["DATABASE_URL"]
+MINIO_ENDPOINT = os.environ["MINIO_ENDPOINT"]
+MINIO_ACCESS_KEY = os.environ["MINIO_ACCESS_KEY"]
+MINIO_SECRET_KEY = os.environ["MINIO_SECRET_KEY"]
 BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "investigations")
 TOR_ROTATION_ENABLED = os.getenv("TOR_ROTATION_ENABLED", "true").lower() == "true"
 
@@ -35,22 +38,70 @@ if not minio_client.bucket_exists(BUCKET_NAME):
     except Exception as e:
         logger.error(f"Failed to create bucket: {e}")
 
+def validate_url(url: str):
+    """
+    Prevents SSRF by blocking internal/private IP ranges and dangerous hostnames.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ['http', 'https']:
+        raise ValueError(f"Invalid URL scheme: {parsed.scheme}")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Invalid URL: No hostname found")
+
+    # 1. Block known dangerous internal hostnames
+    blacklist = ['localhost', 'tor', 'minio', 'postgres', 'redis', 'meilisearch', 'analysis', 'gateway']
+    if hostname.lower() in blacklist:
+        raise ValueError(f"Access to internal hostname blocked: {hostname}")
+
+    # 2. Resolve IP and check if it is private
+    try:
+        ip_addr = socket.gethostbyname(hostname)
+        ip = ipaddress.ip_address(ip_addr)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+            raise ValueError(f"Access to private IP blocked: {ip_addr}")
+        
+        # Cloud Metadata IP (AWS, GCP, etc.)
+        if str(ip) == "169.254.169.254":
+             raise ValueError("Access to cloud metadata IP blocked")
+             
+    except socket.gaierror:
+        # If we can't resolve, it might be an onion or just invalid. 
+        # For onion sites, we let it pass as it will be handled by Tor proxy.
+        if not hostname.endswith('.onion'):
+            logger.warning(f"Could not resolve hostname {hostname}, proceeding with caution")
+    except Exception as e:
+        raise ValueError(f"URL validation error: {e}")
+
 async def collect_url(task_id: str, url: str) -> bool:
     logger.info(f"Starting collection for task {task_id}: {url}")
     
-    # Tor Rotation
+    # SSRF Validation
+    try:
+        validate_url(url)
+    except ValueError as e:
+        logger.error(f"URL validation failed for {url}: {e}")
+        return False
+
+    # Tor Rotation & Proxy Enforcement
+    proxy_settings = None
     if TOR_ROTATION_ENABLED:
         logger.info("Renewing Tor identity...")
         await renew_tor_identity()
+        
+        tor_proxy = os.getenv("TOR_PROXY_URL")
+        # FAIL-CLOSED: If rotation enabled but no proxy config, do not proceed to avoid real IP leak
+        if not tor_proxy:
+             logger.error("TOR_ROTATION_ENABLED but TOR_PROXY_URL is missing. ABORTING to prevent IP leak.")
+             return False
+        proxy_settings = {"server": tor_proxy}
     
     async with async_playwright() as p:
         # Launch browser (Chromium)
         # We might want to pass proxy settings here if using Tor via HTTP proxy (e.g. Privoxy)
         # assuming tor is exposing SOCKS5 at 9050 or HTTP at 8118
-        proxy_settings = None
-        if os.getenv("TOR_PROXY_URL"):
-             proxy_settings = {"server": os.getenv("TOR_PROXY_URL")}
-
+        
         try:
             browser = await p.chromium.launch(
                 headless=True,

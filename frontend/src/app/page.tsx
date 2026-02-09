@@ -152,7 +152,9 @@ export default function Home() {
                                 {searchResults.map((hit: any) => (
                                     <Link key={hit.id} href={`/investigations/${hit.id}`} className="block p-4 hover:bg-blue-50 border-b last:border-0 transition-colors">
                                         <div className="font-semibold text-blue-600 mb-1">{hit.url}</div>
-                                        <div className="text-sm text-slate-600 line-clamp-2" dangerouslySetInnerHTML={{ __html: hit.snippet }} />
+                                        <div className="text-sm text-slate-600 line-clamp-2">
+                                            {hit.snippet.replace(/<[^>]*>?/gm, '')}
+                                        </div>
                                     </Link>
                                 ))}
                             </div>

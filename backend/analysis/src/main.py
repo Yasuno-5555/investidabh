@@ -30,11 +30,11 @@ from minio import Minio
 import psycopg
 
 # Configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-DB_DSN = os.getenv("DATABASE_URL", "postgres://investidubh:secret@localhost:5432/investidubh_core")
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "admin")
-MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "password")
+REDIS_URL = os.environ["REDIS_URL"]
+DB_DSN = os.environ["DATABASE_URL"]
+MINIO_ENDPOINT = os.environ["MINIO_ENDPOINT"]
+MINIO_ACCESS_KEY = os.environ["MINIO_ROOT_USER"]
+MINIO_SECRET_KEY = os.environ["MINIO_ROOT_PASSWORD"]
 BUCKET_NAME = "raw-data"
 
 # Initialize MinIO
@@ -165,12 +165,18 @@ async def worker():
                 except Exception as e:
                     logger.error(f"DB Error fetching HTML path: {e}")
 
-                # 3. Analyze Text (NLP - Named Entity Recognition & Sentiment)
+                        # 3. Analyze Text (NLP - Named Entity Recognition & Sentiment)
                 if html_path:
                     try:
                         # Fetch content from MinIO
                         resp = minio_client.get_object(BUCKET_NAME, html_path)
-                        html_content = resp.read().decode('utf-8')
+                        # --- Reliability Fix: Content Size Limit ---
+                        # Read only up to 5MB to prevent OOM
+                        html_content_bytes = resp.read(5 * 1024 * 1024)
+                        if resp.read(1):
+                             logger.warning(f"Artifact {html_path} exceeds 5MB limit. Truncating for analysis.")
+                        
+                        html_content = html_content_bytes.decode('utf-8', errors='ignore')
                         resp.close()
                         resp.release_conn()
                         

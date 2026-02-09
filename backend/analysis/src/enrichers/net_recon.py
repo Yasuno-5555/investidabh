@@ -19,15 +19,50 @@ class WhoisEnricher(BaseEnricher):
             
         try:
             logger.info(f"Running WHOIS for {entity_value}")
-            w = whois.whois(entity_value)
+            
+            # OPSEC: Check for Tor Proxy
+            proxy_url = os.getenv("TOR_PROXY_URL") # e.g. socks5h://tor:9050
+            
+            if proxy_url and proxy_url.startswith("socks5"):
+                try:
+                    import socks
+                    import socket
+                    from urllib.parse import urlparse
+                    
+                    parsed = urlparse(proxy_url)
+                    proxy_host = parsed.hostname
+                    proxy_port = parsed.port or 9050
+                    
+                    # Monkeypatch socket for this lookup only if possible, 
+                    # or better: use a library that supports it.
+                    # python-whois uses socket.socket.
+                    # We can use socks.set_default_proxy and socks.socksocket
+                    
+                    original_socket = socket.socket
+                    socks.set_default_proxy(socks.SOCKS5, proxy_host, proxy_port, True)
+                    socket.socket = socks.socksocket
+                    
+                    try:
+                        w = whois.whois(entity_value)
+                    finally:
+                        socket.socket = original_socket # Restore
+                except ImportError:
+                    logger.error("PySocks not installed. Cannot use proxy for WHOIS. Failing to prevent leak.")
+                    return None
+            else:
+                # If no proxy and we are in a high-security context, we might want to block this.
+                # However, original behavior was direct. We will allow if no proxy set, 
+                # but log a warning.
+                logger.warning(f"No Tor proxy configured for WHOIS lookup of {entity_value}. Performing direct lookup (OPSEC Risk).")
+                w = whois.whois(entity_value)
+
             # Convert to dict and Handle datetime objects for serialization if needed
-            # But just returning the dict is usually fine for our internal processing
             result = {
-                "registrar": w.registrar,
-                "creation_date": str(w.creation_date) if w.creation_date else None,
-                "expiration_date": str(w.expiration_date) if w.expiration_date else None,
-                "emails": w.emails,
-                "org": w.org
+                "registrar": getattr(w, 'registrar', None),
+                "creation_date": str(w.creation_date) if getattr(w, 'creation_date', None) else None,
+                "expiration_date": str(w.expiration_date) if getattr(w, 'expiration_date', None) else None,
+                "emails": getattr(w, 'emails', None),
+                "org": getattr(w, 'org', None)
             }
             return {"whois": result}
         except Exception as e:

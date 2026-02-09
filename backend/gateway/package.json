@@ -20,7 +20,8 @@
         "bcryptjs": "^2.4.3",
         "pg": "^8.11.0",
         "@investidubh/ts-types": "workspace:*",
-        "@investidubh/logger": "workspace:*"
+        "@investidubh/logger": "workspace:*",
+        "@fastify/rate-limit": "^9.1.0"
     },
     "devDependencies": {
         "tsx": "^4.7.0",

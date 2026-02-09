@@ -19,14 +19,22 @@ async def check_and_create_enum(cur, enum_name, values):
         logger.info(f"[-] ENUM '{enum_name}' already exists. (Skipping value check for now)")
 
 async def add_column_if_not_exists(cur, table, column, definition):
-    await cur.execute(f"""
+    await cur.execute("""
         SELECT column_name 
         FROM information_schema.columns 
-        WHERE table_name='{table}' AND column_name='{column}';
-    """)
+        WHERE table_name=%s AND column_name=%s;
+    """, (table, column))
     if not await cur.fetchone():
         logger.info(f"[*] Adding column '{column}' to '{table}'...")
-        await cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition};")
+        # Columns and table names cannot be parameterized in the same way as values
+        # but we can at least ensure we are safe here or use Identifier if available.
+        from psycopg.sql import Identifier, SQL
+        query = SQL("ALTER TABLE {table} ADD COLUMN {column} {definition}").format(
+            table=Identifier(table),
+            column=Identifier(column),
+            definition=SQL(definition)
+        )
+        await cur.execute(query)
         logger.info(f"[+] Column '{column}' added.")
     else:
         logger.info(f"[-] Column '{column}' already exists.")
@@ -121,6 +129,27 @@ async def migrate():
                     logger.info("[+] Table 'audit_logs' created.")
                 else:
                     logger.info("[-] Table 'audit_logs' already exists.")
+
+                # --- 🛡️ Row-Level Security (RLS) Implementation ---
+                logger.info("[*] Enabling Row-Level Security (RLS)...")
+                tables_with_rls = ['investigations', 'artifacts', 'intelligence', 'audit_logs']
+                for table in tables_with_rls:
+                    await cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
+                    
+                    # Create policy: user can only see their own rows
+                    # Note: We need to DROP first to make it idempotent
+                    await cur.execute(f"DROP POLICY IF EXISTS {table}_user_isolation ON {table};")
+                    
+                    if table == 'investigations' or table == 'audit_logs':
+                        await cur.execute(f"""
+                            CREATE POLICY {table}_user_isolation ON {table}
+                            USING (user_id = (current_setting('app.current_user_id', true))::uuid);
+                        """)
+                    elif table == 'artifacts' or table == 'intelligence':
+                        await cur.execute(f"""
+                            CREATE POLICY {table}_user_isolation ON {table}
+                            USING (investigation_id IN (SELECT id FROM investigations WHERE user_id = (current_setting('app.current_user_id', true))::uuid));
+                        """)
 
                 await aconn.commit()
                 logger.info("[+] Migration completed successfully.")
