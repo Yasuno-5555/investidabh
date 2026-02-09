@@ -12,8 +12,8 @@ from minio import Minio
 # Config
 DB_DSN = os.getenv("DATABASE_URL", "postgresql://investidubh:secret@localhost:5432/investidubh_core")
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER") or os.getenv("MINIO_ACCESS_KEY") or "admin"
+MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD") or os.getenv("MINIO_SECRET_KEY") or "password"
 BUCKET_NAME = os.getenv("MINIO_BUCKET", "investigations")
 
 # Setup MinIO Client locally to avoid circular imports
@@ -61,7 +61,7 @@ def resolve_infrastructure(target_url):
     
     return results
 
-async def extract_and_save(investigation_id, target_url=""): 
+async def extract_and_save(investigation_id, target_url="", db_pool=None): 
     """
     1. Fetch HTML from MinIO (using DB to find path)
     2. Infrastructure Recon (DNS/IP)
@@ -74,7 +74,13 @@ async def extract_and_save(investigation_id, target_url=""):
     # 1. Get Artifact Path from DB
     html_path = None
     try:
-        async with await psycopg.AsyncConnection.connect(DB_DSN) as aconn:
+        # Use pool if provided
+        if db_pool:
+             aconn_ctx = db_pool.connection()
+        else:
+             aconn_ctx = await psycopg.AsyncConnection.connect(DB_DSN)
+
+        async with aconn_ctx as aconn:
             async with aconn.cursor() as cur:
                 await cur.execute(
                     "SELECT storage_path, artifact_type FROM artifacts WHERE investigation_id = %s",
@@ -85,7 +91,7 @@ async def extract_and_save(investigation_id, target_url=""):
                     if row[1] == 'html':
                         html_path = row[0]
                     elif row[1] == 'raw_data':
-                        await process_raw_data_artifact(investigation_id, row[0])
+                        await process_raw_data_artifact(investigation_id, row[0], db_pool=db_pool)
     except Exception as e:
         print(f"[!] DB Read Error: {e}")
         return
@@ -244,7 +250,7 @@ async def extract_and_save(investigation_id, target_url=""):
         await save_entities_batch(investigation_id, entities)
 
 
-async def process_raw_data_artifact(investigation_id, storage_path):
+async def process_raw_data_artifact(investigation_id, storage_path, db_pool=None):
     """
     Reads JSON artifact from MinIO and saves entities.
     Optimized: Batch inserts, Non-blocking I/O
@@ -319,7 +325,7 @@ async def process_raw_data_artifact(investigation_id, storage_path):
         
         # Batch Save
         if extracted_entities:
-            await save_entities_batch(investigation_id, extracted_entities)
+            await save_entities_batch(investigation_id, extracted_entities, db_pool=db_pool)
                     
     except Exception as e:
         print(f"[!] Error processing raw data {storage_path}: {e}")
@@ -362,9 +368,9 @@ async def save_entities_batch(investigation_id, entities):
                     await cur.executemany(
                         """
                         INSERT INTO intelligence 
-                        (investigation_id, entity_type, value, normalized_value, confidence_score, metadata, source_type, created_at)
-                        VALUES (%s, %s::entity_type_enum, %s, %s, %s, %s, %s::source_type_enum, %s)
-                        ON CONFLICT (investigation_id, entity_type, value) DO NOTHING
+                        (investigation_id, type, value, normalized_value, confidence, metadata, source_type, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT DO NOTHING
                         """,
                         params_list
                     )

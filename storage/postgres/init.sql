@@ -25,12 +25,14 @@ CREATE TABLE IF NOT EXISTS intelligence (
     value TEXT NOT NULL,        -- Original extracted text
     normalized_value TEXT,      -- [NEW] Normalized for linking (lowercase etc)
     confidence FLOAT DEFAULT 0.5,
+    metadata JSONB,             -- [NEW] Rich metadata (WHOIS, DNS, etc.)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Index for faster graph queries
 CREATE INDEX IF NOT EXISTS idx_intelligence_norm ON intelligence(normalized_value);
 CREATE INDEX IF NOT EXISTS idx_intelligence_investigation_id ON intelligence(investigation_id);
+CREATE INDEX IF NOT EXISTS idx_intelligence_metadata ON intelligence USING gin (metadata);
 
 -- ユーザーテーブル
 CREATE TABLE IF NOT EXISTS users (
@@ -42,3 +44,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- 既存テーブルの所有者カラム (以前のデータとの互換性のためNULL許容)
 ALTER TABLE investigations ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id);
+
+-- Indexes for Foreign Keys (Performance)
+CREATE INDEX IF NOT EXISTS idx_investigations_user_id ON investigations(user_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_investigation_id ON artifacts(investigation_id);
+-- idx_intelligence_investigation_id already exists above

@@ -55,6 +55,33 @@ async def worker(
         logger.error(f"Failed to initialize collectors: {e}")
         return
 
+    # Initialize Playwright & Browser (Singleton)
+    playwright_manager = None
+    browser_instance = None
+    
+    # Configure Proxy for Browser
+    proxy_settings = None
+    try:
+        if os.getenv("TOR_ROTATION_ENABLED", "true").lower() == "true":
+            tor_proxy = os.getenv("TOR_PROXY_URL") or "socks5://tor:9050"
+            if tor_proxy:
+                proxy_settings = {"server": tor_proxy}
+                logger.info(f"Using Proxy: {tor_proxy}")
+    except Exception as e:
+        logger.warning(f"Failed to configure proxy: {e}")
+
+    try:
+        from playwright.async_api import async_playwright
+        playwright_manager = await async_playwright().start()
+        browser_instance = await playwright_manager.chromium.launch(
+            headless=True, 
+            proxy=proxy_settings
+        )
+        logger.info("[*] Browser initialized (Singleton)")
+    except Exception as e:
+        logger.error(f"Critial: Failed to launch browser: {e}")
+        return
+
     while True:
         r = None
         try:
@@ -118,8 +145,8 @@ async def worker(
                              success = await save_data_artifact(task_id, data, "infra")
     
                         else:
-                            # Default Web Collector
-                            success = await collect_url(task_id, url)
+                            # Default Web Collector - Pass the singleton browser!
+                            success = await collect_url(task_id, url, browser=browser_instance)
                             
                     except Exception as e:
                         logger.error(f"Task execution failed: {e}")
@@ -191,6 +218,12 @@ async def worker(
             await close_db_pool()
             
             await asyncio.sleep(5)  # Wait a bit before reconnecting
+            
+    # Cleanup Browser (When worker loop exits, which catches all)
+    if browser_instance:
+        await browser_instance.close()
+    if playwright_manager:
+        await playwright_manager.stop()
 
 if __name__ == "__main__":
     try:

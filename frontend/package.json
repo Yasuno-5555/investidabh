@@ -14,7 +14,8 @@
         "axios": "^1.5.0",
         "swr": "^2.2.0",
         "reactflow": "^11.10.1",
-        "dagre": "^0.8.5"
+        "dagre": "^0.8.5",
+        "dompurify": "^3.0.6"
     },
     "devDependencies": {
         "typescript": "latest",
@@ -22,6 +23,7 @@
         "@types/react": "latest",
         "@types/react-dom": "latest",
         "@types/dagre": "^0.7.52",
+        "@types/dompurify": "^3.0.5",
         "tailwindcss": "^3.4.1",
         "postcss": "^8.4.31",
         "autoprefixer": "^10.4.16"

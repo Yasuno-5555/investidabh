@@ -144,11 +144,18 @@ async def analyze_and_save(investigation_id: str, text: str, db_pool: AsyncConne
                     ))
                 
                 if params_list:
+                    # Fix: Column names must match init.sql (type, confidence, metadata)
+                    # init.sql: id, investigation_id, type, value, normalized_value, confidence, created_at
+                    # Added via ALTER: user_id (on investigations), metadata (need to add)
+                    
+                    # We need to make sure 'metadata' column exists or we store it elsewhere?
+                    # Proceeding assuming we will ADD 'metadata' to init.sql
+                    
                     await cur.executemany(
                         """
                         INSERT INTO intelligence 
-                        (investigation_id, entity_type, value, normalized_value, confidence_score, metadata, source_type)
-                        VALUES (%s, %s::entity_type_enum, %s, %s, 0.7, %s, 'manual'::source_type_enum)
+                        (investigation_id, type, value, normalized_value, confidence, metadata)
+                        VALUES (%s, %s, %s, %s, 0.7, %s)
                         """,
                         params_list
                     )

@@ -150,12 +150,18 @@ export default function Home() {
                             <div className="px-4 py-2 bg-slate-50 border-b text-xs font-bold text-slate-500">RESULTS</div>
                             <div className="max-h-96 overflow-y-auto">
                                 {searchResults.map((hit: any) => (
-                                    <Link key={hit.id} href={`/investigations/${hit.id}`} className="block p-4 hover:bg-blue-50 border-b last:border-0 transition-colors">
-                                        <div className="font-semibold text-blue-600 mb-1">{hit.url}</div>
-                                        <div className="text-sm text-slate-600 line-clamp-2">
-                                            {hit.snippet.replace(/<[^>]*>?/gm, '')}
-                                        </div>
-                                    </Link>
+import DOMPurify from 'dompurify';
+
+                                // ... (inside the component)
+
+                                <Link key={hit.id} href={`/investigations/${hit.id}`} className="block p-4 hover:bg-blue-50 border-b last:border-0 transition-colors">
+                                    <div className="font-semibold text-blue-600 mb-1">{hit.url}</div>
+                                    <div className="text-sm text-slate-600 line-clamp-2"
+                                        dangerouslySetInnerHTML={{
+                                            __html: DOMPurify.sanitize(hit.snippet)
+                                        }}
+                                    />
+                                </Link>
                                 ))}
                             </div>
                         </div>

@@ -1,15 +1,25 @@
 import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { Pool } from 'pg';
+import { z } from 'zod';
+
+const CredentialsSchema = z.object({
+    username: z.string().min(3).max(50),
+    password: z.string().min(6).max(100)
+});
 
 export default async function authRoutes(app: FastifyInstance, options: { pool: Pool }) {
     const { pool } = options;
 
     app.post('/register', async (request, reply) => {
-        const { username, password } = request.body as any;
-        if (!username || !password) return reply.status(400).send("Missing credentials");
+        const result = CredentialsSchema.safeParse(request.body);
+        if (!result.success) {
+            return reply.status(400).send(result.error);
+        }
 
+        const { username, password } = result.data;
         const hashedPassword = await bcrypt.hash(password, 10);
+
         try {
             const res = await pool.query(
                 "INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username",
@@ -22,7 +32,12 @@ export default async function authRoutes(app: FastifyInstance, options: { pool: 
     });
 
     app.post('/login', async (request, reply) => {
-        const { username, password } = request.body as any;
+        const result = CredentialsSchema.safeParse(request.body);
+        if (!result.success) {
+            return reply.status(400).send(result.error);
+        }
+
+        const { username, password } = result.data;
         const res = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
         const user = res.rows[0];
 

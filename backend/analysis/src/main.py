@@ -34,9 +34,9 @@ import psycopg
 REDIS_URL = os.environ["REDIS_URL"]
 DB_DSN = os.environ["DATABASE_URL"]
 MINIO_ENDPOINT = os.environ["MINIO_ENDPOINT"]
-MINIO_ACCESS_KEY = os.environ["MINIO_ROOT_USER"]
-MINIO_SECRET_KEY = os.environ["MINIO_ROOT_PASSWORD"]
-BUCKET_NAME = "raw-data"
+MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER") or "admin"
+MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD") or "password"
+BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "investigations")
 
 # Initialize MinIO
 minio_client = Minio(
@@ -139,7 +139,7 @@ async def process_enrichment_and_alerts(investigation_id, r_conn, db_pool):
 
 async def worker():
     # Run DB Migration on Startup
-    # await migrate()
+    await migrate()
 
     logger.info(f"[*] Analysis Worker started. Connecting to {REDIS_URL}...")
     
@@ -171,7 +171,7 @@ async def worker():
                     # 1. Run Entity Extraction (Emails, Phones - existing)
                     # NOTE: extract_and_save might still use its own connection logic. 
                     # Ideally we pass pool, but for now we focus on main flow and nlp.
-                    await extract_and_save(investigation_id, target_url=target_url)
+                    await extract_and_save(investigation_id, target_url=target_url, db_pool=db_pool)
 
                     # 2. Fetch HTML content for Advanced Analysis
                     html_path = None

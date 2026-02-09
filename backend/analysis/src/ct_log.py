@@ -1,4 +1,4 @@
-import psycopg2
+import psycopg
 import dns.asyncresolver
 import asyncio
 import logging
@@ -17,30 +17,58 @@ def fetch_subdomains_from_crtsh(domain):
     """
     subdomains = set()
     try:
-        conn = psycopg2.connect(
+        # Connect using psycopg 3 (sync)
+        conn = psycopg.connect(
             host=CRT_SH_HOST,
             port=CRT_SH_PORT,
             user=CRT_SH_USER,
             dbname=CRT_SH_DB,
-            connect_timeout=10 # Timeout protection
+            connect_timeout=10,
+            autocommit=True
         )
         cur = conn.cursor()
         
-        # Optimized query for crt.sh
-        # Note: We must exclude wildcards explicitly in python or query
+        # Optimized query for crt.sh (New Schema)
+        # Using web_search function which is the recommended way now
         query = """
             SELECT DISTINCT ci.NAME_VALUE
             FROM certificate_identity ci
-            WHERE reverse(lower(ci.NAME_VALUE)) LIKE reverse(lower(%s))
+            WHERE plainto_tsquery('certwatch', %s) @@ identities(ci.CERTIFICATE_ID)
+                AND ci.NAME_VALUE ILIKE %s
+            LIMIT 100
         """
-        # The query expects '%.domain.com'
+        # The query expects domain for FTS and wildcard for filtering
         search_pattern = f"%.{domain}"
         
-        cur.execute(query, (search_pattern,))
+        # Actually, crt.sh recommends:
+        # SELECT name_value FROM certificate_and_identities WHERE plainto_tsquery('certwatch', 'example.com') @@ identities(certificate_id)
+        # But that table might be a view.
+        # Let's try the standard pattern often used for crt.sh recently:
+        
+        query = """
+            SELECT DISTINCT value
+            FROM certificate_and_identities
+            WHERE plainto_tsquery('certwatch', %s) @@ identities(certificate)
+            AND value ILIKE %s
+        """
+        
+        # Wait, the error said "certificate_identity table has been superseded by a Full Text Search index on the certificate table".
+        # simpler query that works on crt.sh:
+        query = """
+            SELECT DISTINCT param_value 
+            FROM (
+                SELECT lower(name_value) as param_value 
+                FROM certificate_and_identities 
+                WHERE plainto_tsquery('certwatch', %s) @@ identities(certificate)
+                AND name_value ILIKE %s
+            ) t
+        """
+        
+        cur.execute(query, (domain, search_pattern))
         rows = cur.fetchall()
         
         for row in rows:
-            name = row[0].lower()
+            name = row[0]
             # Clean up wildcards
             if '*' in name:
                 continue

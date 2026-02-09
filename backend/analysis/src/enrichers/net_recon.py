@@ -1,6 +1,7 @@
 import whois
 import dns.resolver
 import logging
+import os
 from typing import Dict, Any, Optional
 from .base import BaseEnricher
 
@@ -21,40 +22,17 @@ class WhoisEnricher(BaseEnricher):
             logger.info(f"Running WHOIS for {entity_value}")
             
             # OPSEC: Check for Tor Proxy
-            proxy_url = os.getenv("TOR_PROXY_URL") # e.g. socks5h://tor:9050
+            proxy_url = os.getenv("TOR_PROXY_URL") 
             
             if proxy_url and proxy_url.startswith("socks5"):
-                try:
-                    import socks
-                    import socket
-                    from urllib.parse import urlparse
-                    
-                    parsed = urlparse(proxy_url)
-                    proxy_host = parsed.hostname
-                    proxy_port = parsed.port or 9050
-                    
-                    # Monkeypatch socket for this lookup only if possible, 
-                    # or better: use a library that supports it.
-                    # python-whois uses socket.socket.
-                    # We can use socks.set_default_proxy and socks.socksocket
-                    
-                    original_socket = socket.socket
-                    socks.set_default_proxy(socks.SOCKS5, proxy_host, proxy_port, True)
-                    socket.socket = socks.socksocket
-                    
-                    try:
-                        w = whois.whois(entity_value)
-                    finally:
-                        socket.socket = original_socket # Restore
-                except ImportError:
-                    logger.error("PySocks not installed. Cannot use proxy for WHOIS. Failing to prevent leak.")
-                    return None
-            else:
-                # If no proxy and we are in a high-security context, we might want to block this.
-                # However, original behavior was direct. We will allow if no proxy set, 
-                # but log a warning.
-                logger.warning(f"No Tor proxy configured for WHOIS lookup of {entity_value}. Performing direct lookup (OPSEC Risk).")
-                w = whois.whois(entity_value)
+                # python-whois wraps the 'whois' binary via subprocess.
+                # Monkeypatching socket does not work. 
+                # To convert this to Tor, the entire worker process should be run with 'torsocks',
+                # or we must use a native python whois library that supports proxies.
+                # For now, we log a warning as we cannot enforce proxying here.
+                logger.warning(f"Tor Proxy configured but 'python-whois' does not support it natively. Ensure worker is running with 'torsocks' for OPSEC.")
+            
+            w = whois.whois(entity_value)
 
             # Convert to dict and Handle datetime objects for serialization if needed
             result = {
