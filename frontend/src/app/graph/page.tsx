@@ -65,12 +65,14 @@ export default function GraphPage() {
     // UI State
     const [selectedNode, setSelectedNode] = useState<any>(null);
     const [loading, setLoading] = useState(false);
+    const [menu, setMenu] = useState<{ id: string, top?: number, left?: number, right?: number, bottom?: number } | null>(null);
 
 
-    // Timeline State
+    // Timeline & Filter State
     const [minTime, setMinTime] = useState(0);
     const [maxTime, setMaxTime] = useState(100);
     const [currentTime, setCurrentTime] = useState(100);
+    const [minScore, setMinScore] = useState(0);
 
     // Phase 33.2: Hypothesis State
     const [isHypothesisMode, setIsHypothesisMode] = useState(false);
@@ -185,16 +187,48 @@ export default function GraphPage() {
     // Close Details
     const closeDetails = () => setSelectedNode(null);
 
+    // Context Menu Handler
+    const onNodeContextMenu = (event: React.MouseEvent, node: any) => {
+        event.preventDefault();
+        const pane = document.querySelector('.react-flow__pane')?.getBoundingClientRect();
+        if (pane) {
+            setMenu({
+                id: node.id,
+                top: event.clientY,
+                left: event.clientX,
+            });
+        }
+    };
 
-    // 2. Filter logic (Timeline Effect)
+    const onPaneClick = () => setMenu(null);
+
+    // Node Actions
+    const deleteNode = (id: string) => {
+        setNodes((nds) => nds.filter((node) => node.id !== id));
+        setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
+        setMenu(null);
+    };
+
+    const pivotSearch = (node: any) => {
+        const query = node.data.value || node.data.label;
+        window.open(`/?search=${encodeURIComponent(query)}`, '_blank');
+        setMenu(null);
+    };
+
+
+    // 2. Filter logic (Timeline Effect & Priority)
     useEffect(() => {
         if (initialNodes.length === 0) return;
 
-        // 現在時刻より「前」に作られたノードのみ表示
-        const filteredNodes = initialNodes.filter(n => n.data.timestamp <= currentTime);
+        // 現在時刻より「前」に作られたノードのみ表示 + スコアフィルタリング
+        const filteredNodes = initialNodes.filter(n => {
+            const timeOk = n.data.timestamp <= currentTime;
+            const score = n.data.priority?.score || n.data.score || 0;
+            const scoreOk = score >= minScore;
+            return timeOk && scoreOk;
+        });
 
         // エッジは「両端のノードが存在する」かつ「エッジ自体の作成時間が現在時刻以下」
-        // (今回はエッジデータにもtimestamp入れたので単純比較でも可)
         const activeNodeIds = new Set(filteredNodes.map(n => n.id));
         const filteredEdges = initialEdges.filter(e =>
             e.data.timestamp <= currentTime &&
@@ -204,7 +238,7 @@ export default function GraphPage() {
 
         setNodes(filteredNodes);
         setEdges(filteredEdges);
-    }, [currentTime, initialNodes, initialEdges, setNodes, setEdges]);
+    }, [currentTime, minScore, initialNodes, initialEdges, setNodes, setEdges]);
 
     // 日付フォーマット用
     const formatDate = (ts: number) => {
@@ -223,6 +257,8 @@ export default function GraphPage() {
                     onEdgesChange={onEdgesChange}
                     onConnect={onConnect}
                     onNodeClick={(e, node) => setSelectedNode(node)}
+                    onNodeContextMenu={onNodeContextMenu}
+                    onPaneClick={onPaneClick}
                     fitView
                     attributionPosition="bottom-right"
                     minZoom={0.1}
@@ -230,6 +266,39 @@ export default function GraphPage() {
                     <Background color="#cbd5e1" gap={20} />
                     <Controls />
                     <MiniMap className="border rounded shadow-lg" />
+
+                    {/* Node Context Menu */}
+                    {menu && (
+                        <div
+                            style={{ top: menu.top, left: menu.left }}
+                            className="fixed z-50 bg-white shadow-2xl border border-slate-200 rounded-lg py-2 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
+                        >
+                            <div className="px-4 py-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-50 mb-1">Node Actions</div>
+                            <button 
+                                onClick={() => pivotSearch(nodes.find(n => n.id === menu.id))}
+                                className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 transition-colors flex items-center gap-2"
+                            >
+                                🔍 Pivot Search
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    const node = nodes.find(n => n.id === menu.id);
+                                    alert(`Starting targeted scan for: ${node.data.value || node.data.label}`);
+                                    setMenu(null);
+                                }}
+                                className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 transition-colors flex items-center gap-2"
+                            >
+                                ⚡ Targeted Rescan
+                            </button>
+                            <div className="border-t border-slate-50 my-1"></div>
+                            <button 
+                                onClick={() => deleteNode(menu.id)}
+                                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2"
+                            >
+                                🗑️ Delete Node (FP)
+                            </button>
+                        </div>
+                    )}
 
                     {/* Top Right Controls */}
                     <Panel position="top-right" className="flex flex-col gap-2 max-w-xs">
@@ -451,6 +520,19 @@ export default function GraphPage() {
                                         </div>
                                     </div>
 
+                                    {/* Cross-Investigation Alert */}
+                                    {selectedNode.data.cross_count > 0 && (
+                                        <div className="mt-4 bg-blue-50 border border-blue-200 rounded-xl p-4 flex gap-3 items-center animate-pulse">
+                                            <span className="text-2xl">🔗</span>
+                                            <div>
+                                                <div className="text-xs font-bold text-blue-800 uppercase tracking-tight">Cross-Investigation Match</div>
+                                                <div className="text-sm text-blue-600">
+                                                    Found in <strong>{selectedNode.data.cross_count}</strong> other investigation(s).
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {/* Ghost Entity based on ANCIENT */}
                                     {selectedNode.data.stats?.aging_category === 'ANCIENT' && (
                                         <div className="mt-4 bg-orange-50 border border-orange-100 rounded-lg p-3 flex gap-3 text-sm text-orange-800">
@@ -632,26 +714,46 @@ export default function GraphPage() {
                         </Panel>
                     )}
 
-                    {/* Timeline Control Panel */}
+                    {/* Timeline & Filter Control Panel */}
                     <Panel position="bottom-center" className="w-full max-w-xl mb-8 p-0">
-                        <div className="bg-white/80 backdrop-blur rounded-2xl shadow-xl border border-white/50 p-4">
-                            <div className="flex justify-between text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">
-                                <span>Timeline</span>
-                                <span>{formatDate(currentTime)}</span>
+                        <div className="bg-white/90 backdrop-blur rounded-2xl shadow-xl border border-white/50 p-5 space-y-4">
+                            {/* Timeline Slider */}
+                            <div>
+                                <div className="flex justify-between text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">
+                                    <span>Timeline Filter</span>
+                                    <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{formatDate(currentTime)}</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min={minTime}
+                                    max={maxTime}
+                                    value={currentTime}
+                                    onChange={(e) => setCurrentTime(Number(e.target.value))}
+                                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600 hover:accent-blue-700"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-mono">
+                                    <span>{formatDate(minTime)}</span>
+                                    <span>{formatDate(maxTime)}</span>
+                                </div>
                             </div>
 
-                            <input
-                                type="range"
-                                min={minTime}
-                                max={maxTime}
-                                value={currentTime}
-                                onChange={(e) => setCurrentTime(Number(e.target.value))}
-                                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600 hover:accent-blue-700"
-                            />
-
-                            <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-mono">
-                                <span>{formatDate(minTime)}</span>
-                                <span>{formatDate(maxTime)}</span>
+                            {/* Priority Slider */}
+                            <div className="border-t border-slate-100 pt-4">
+                                <div className="flex justify-between text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">
+                                    <span>Threat Priority Filter</span>
+                                    <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded">&ge; {minScore}</span>
+                                </div>
+                                <input 
+                                    type="range" 
+                                    min="0" max="100" 
+                                    value={minScore} 
+                                    onChange={(e) => setMinScore(Number(e.target.value))}
+                                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-medium">
+                                    <span>All Nodes</span>
+                                    <span>High Priority Only</span>
+                                </div>
                             </div>
                         </div>
                     </Panel>

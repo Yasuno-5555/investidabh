@@ -2,16 +2,21 @@
 
 The Investidubh CLI provides a powerful, headless interface for managing investigations, creating automation scripts, and integrating Investidubh into your existing workflows.
 
-# Investidubh CLI Manual
-
-The Investidubh CLI provides a powerful, headless interface for managing investigations, creating automation scripts, and integrating Investidubh into your existing workflows.
-
 ## Installation
 
 The CLI requires Python 3.8+ and minimal dependencies.
 
+**Automated Setup (Recommended):**
+From the project root, run the setup script. This will set up the environment variables, Docker containers, create the CLI virtual environment, and create a convenient `./investidubh` executable wrapper.
 ```bash
-# From project root
+chmod +x setup.sh
+./setup.sh
+```
+
+**Manual Setup:**
+```bash
+python3 -m venv cli/venv
+source cli/venv/bin/activate
 pip install -r cli/requirements.txt
 ```
 
@@ -23,75 +28,102 @@ pip install -r cli/requirements.txt
 
 **Example:**
 ```bash
-python3 cli/investidubh_cli.py --api-url http://192.168.1.10:4000 list
+./investidubh --api-url http://192.168.1.10:4000 list
 ```
+*(Note: Examples below use the `./investidubh` wrapper. If you installed manually, use `python cli/investidubh_cli.py` instead.)*
 
 ## Authentication
 
 Before running commands, you must authenticate. The CLI saves your JWT token to `~/.investidubh_token`.
 
+### `auth register` - Create Account
 ```bash
-# Interactive login
-python3 cli/investidubh_cli.py auth login
-
-# Output
-# Username: admin
-# Password: 
-# Successfully logged in!
+./investidubh auth register
+# Prompts for Username and Password, and registers a new account.
 ```
 
-> **Note**: You can also use non-interactive login by passing `--username` and `--password` flags, but be careful with history.
+### `auth login` - Log In
+```bash
+./investidubh auth login
+# Prompts for Username and Password, and saves the auth token locally.
+```
 
 ## Commands
 
 ### `scan` - Start Investigation
-Queues a new URL for investigation.
+Queues a new URL for investigation. If the URL is omitted, the CLI will prompt for it.
 
 ```bash
-python3 cli/investidubh_cli.py scan https://example.com
+# Start a scan
+./investidubh scan https://example.com
 
-# Output
-# [*] Starting investigation for https://example.com...
-# Investigation queued! ID: c5cae1be-1d0c-47dd-b20a-6779ee867ace
+# Start a scan and wait for completion with a progress spinner
+./investidubh scan https://example.com --wait
 ```
 
 ### `list` - List Investigations
 Shows the most recent investigations with their status.
 
 ```bash
-python3 cli/investidubh_cli.py list
+./investidubh list
 ```
-
-| ID | Target URL | Status | Created At |
-|----|------------|--------|------------|
-| ...| ...        | ...    | ...        |
 
 ### `show` - View Details
-Displays detailed intelligence and artifacts for a specific investigation.
+Displays detailed intelligence and artifacts for a specific investigation. If the ID is omitted, the CLI will prompt for it.
 
 ```bash
-python3 cli/investidubh_cli.py show <investigation_id>
+./investidubh show <investigation_id>
 ```
 
-**Output includes:**
-- Status and Target
-- Extracted Intelligence (Type, Value, Source)
-- Artifact Paths (Screenshots, HTML)
+### `timeline` - Temporal Analysis
+Displays the events associated with an investigation ordered by time.
+
+```bash
+./investidubh timeline <investigation_id>
+```
+
+### `graph` - Export Global Graph Data
+Fetches all entities and their relationships from the system and allows saving them to `graph.json`.
+
+```bash
+./investidubh graph
+```
 
 ### `search` - Global Search
 Searches across all artifacts and intelligence using the Meilisearch engine.
 
 ```bash
-python3 cli/investidubh_cli.py search "malware"
+./investidubh search "malware"
 ```
 
-## scripting & Automation
+### `report` - Download PDF Report
+Generates a PDF report for a given investigation and saves it to the current directory.
+
+```bash
+./investidubh report <investigation_id>
+```
+
+### `audit` - Chain of Custody Logs
+Retrieves the unalterable audit logs showing what actions were performed, by whom, and when, for a specific investigation.
+
+```bash
+./investidubh audit <investigation_id>
+```
+
+### `verify` - System Integrity Check
+Runs a system-wide hash check to ensure that stored artifacts and records have not been tampered with.
+
+```bash
+./investidubh verify
+```
+
+## Scripting & Automation
 
 Since the CLI outputs structured text and exit codes, you can easily chain it with other tools.
 
 **Example: Scan a list of domains**
 ```bash
 while read domain; do
-  python3 cli/investidubh_cli.py scan "https://$domain"
+  ./investidubh scan "https://$domain"
 done < domains.txt
 ```

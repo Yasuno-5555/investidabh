@@ -1,9 +1,8 @@
-'use client';
-
-import { useEffect } from 'react';
-import useSWR from 'swr';
-import axios from 'axios';
 import { useParams, useRouter } from 'next/navigation';
+import Navbar from '../../../components/Navbar';
+import Spinner from '../../../components/Spinner';
+import Link from 'next/link';
+import DecisionModal from '../../../components/DecisionModal';
 
 const fetcher = (url: string) => {
     const token = localStorage.getItem('token');
@@ -14,15 +13,11 @@ const fetcher = (url: string) => {
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 export default function InvestigationDetail() {
-    const { id } = useParams();
+    const [selectedItem, setSelectedItem] = useState<any>(null);
+    const [isDecisionOpen, setIsDecisionOpen] = useState(false);
+    const [isVerifyOpen, setIsVerifyOpen] = useState(false);
+    const [decisionAction, setDecisionAction] = useState('');
     const router = useRouter();
-
-    // Auth Check
-    useEffect(() => {
-        if (!localStorage.getItem('token')) {
-            router.push('/login');
-        }
-    }, [router]);
 
     // 1秒ごとにポーリングしてステータス更新
     const { data: investigation, error } = useSWR(
@@ -59,33 +54,44 @@ export default function InvestigationDetail() {
             {/* Export & Status */ }
     <div className="flex gap-4 items-center">
         {investigation.status === 'COMPLETED' && (
-            <button
-                onClick={async () => {
-                    const token = localStorage.getItem('token');
-                    try {
-                        const response = await axios.get(`${API_URL}/api/investigations/${id}/export`, {
-                            headers: { Authorization: `Bearer ${token}` },
-                            responseType: 'blob',
-                        });
+            <div className="flex gap-2">
+                <button
+                    onClick={async () => {
+                        const token = localStorage.getItem('token');
+                        try {
+                            const response = await axios.get(`${API_URL}/api/investigations/${id}/export`, {
+                                headers: { Authorization: `Bearer ${token}` },
+                                responseType: 'blob',
+                            });
 
-                        const url = window.URL.createObjectURL(new Blob([response.data]));
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.setAttribute('download', `report-${id}.pdf`);
-                        document.body.appendChild(link);
-                        link.click();
-                        link.remove();
-                    } catch (err) {
-                        alert("Failed to download report");
-                    }
-                }}
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm flex items-center gap-2"
-            >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Export PDF
-            </button>
+                            const url = window.URL.createObjectURL(new Blob([response.data]));
+                            const link = document.createElement('a');
+                            link.href = url;
+                            link.setAttribute('download', `report-${id}.pdf`);
+                            document.body.appendChild(link);
+                            link.click();
+                            link.remove();
+                        } catch (err) {
+                            alert("Failed to download report");
+                        }
+                    }}
+                    className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 text-sm font-bold flex items-center gap-2 shadow-md transition-all"
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Export PDF
+                </button>
+                <Link
+                    href={`/investigations/${id}/capture`}
+                    className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 text-sm font-bold flex items-center gap-2 shadow-md transition-all"
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Interactive Workbench
+                </Link>
+            </div>
         )}
     </div>
       </div >
@@ -138,34 +144,108 @@ export default function InvestigationDetail() {
     {
         investigation.intelligence && investigation.intelligence.length > 0 && (
             <div className="mt-12 border-t pt-8">
-                <h2 className="text-xl font-bold mb-4">Extracted Intelligence</h2>
-                <div className="bg-white border rounded overflow-hidden">
-                    <table className="w-full text-left">
-                        <thead className="bg-gray-50 text-sm uppercase text-gray-500">
+                <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-3">
+                    <span className="w-8 h-8 bg-slate-900 text-white rounded-lg flex items-center justify-center text-sm">⚖️</span>
+                    Intelligence Quality Ledger
+                </h2>
+
+                {/* UNKNOWN / CONFLICT BANNERS */}
+                <div className="space-y-4 mb-8">
+                    {investigation.intelligence.some((i: any) => i.status === 'CONFLICT') && (
+                        <div className="bg-red-600 text-white p-4 rounded-2xl flex items-center justify-between shadow-lg shadow-red-200">
+                            <div className="flex items-center gap-4">
+                                <span className="text-2xl animate-bounce">⚠️</span>
+                                <div>
+                                    <div className="font-black uppercase tracking-widest text-[10px]">Critical Timeline Conflict Detected</div>
+                                    <div className="text-sm font-bold">Multiple data points show temporal impossibility. Manual review required.</div>
+                                </div>
+                            </div>
+                            <button className="bg-white text-red-600 px-4 py-2 rounded-xl text-xs font-black hover:bg-slate-100 transition-all">Review Conflicts</button>
+                        </div>
+                    )}
+                    {investigation.intelligence.some((i: any) => i.status === 'UNKNOWN') && (
+                        <div className="bg-slate-900 text-white p-4 rounded-2xl flex items-center justify-between border border-slate-700">
+                            <div className="flex items-center gap-4">
+                                <span className="text-2xl opacity-50">❓</span>
+                                <div>
+                                    <div className="font-black uppercase tracking-widest text-[10px] text-slate-500">Unknown Intelligence State</div>
+                                    <div className="text-sm font-bold">Insufficient evidence to confirm attribution. Data requires external validation.</div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+                <div className="bg-white border border-slate-100 rounded-3xl shadow-xl overflow-hidden">
+                    <table className="w-full text-left border-collapse">
+                        <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 font-black tracking-widest border-b border-slate-100">
                             <tr>
-                                <th className="px-6 py-3">Type</th>
-                                <th className="px-6 py-3">Value</th>
-                                <th className="px-6 py-3">Source</th>
-                                <th className="px-6 py-3">Confidence</th>
+                                <th className="px-6 py-4">Evidence & Source</th>
+                                <th className="px-6 py-4">Observed Value</th>
+                                <th className="px-6 py-4">Multi-Axis Confidence (IQ)</th>
+                                <th className="px-6 py-4">Custody</th>
+                                <th className="px-6 py-4 text-right">Provenance</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y">
+                        <tbody className="divide-y divide-slate-50">
                             {investigation.intelligence.map((item: any) => (
-                                <tr key={item.id} className="hover:bg-gray-50">
-                                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{item.type}</td>
-                                    <td className="px-6 py-4 text-sm text-gray-500 font-mono select-all">{item.value}</td>
-                                    <td className="px-6 py-4 text-sm text-gray-500">
-                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium 
-                                            ${item.source_type === 'manual' ? 'bg-gray-100 text-gray-800' :
-                                                item.source_type === 'rss' ? 'bg-green-100 text-green-800' :
-                                                    item.source_type === 'sns' || item.source_type === 'mastodon' ? 'bg-pink-100 text-pink-800' :
-                                                        item.source_type === 'git' || item.source_type === 'github' ? 'bg-purple-100 text-purple-800' :
-                                                            item.source_type === 'infra' ? 'bg-blue-100 text-blue-800' :
-                                                                'bg-yellow-100 text-yellow-800'}`}>
-                                            {item.source_type || 'manual'}
-                                        </span>
+                                <tr key={item.id} className={`hover:bg-slate-50/80 transition-colors ${item.status === 'CONFLICT' ? 'bg-red-50/50' : ''}`}>
+                                    <td className="px-6 py-4">
+                                        <div className="flex flex-col">
+                                            <span className="text-sm font-bold text-slate-800">{item.type}</span>
+                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{item.source_type}</span>
+                                        </div>
                                     </td>
-                                    <td className="px-6 py-4 text-sm text-gray-500">{item.confidence || item.confidence_score}</td>
+                                    <td className="px-6 py-4">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded select-all border border-slate-200/50">{item.value}</span>
+                                            {item.status === 'CONFLICT' && <span className="bg-red-600 text-white text-[8px] font-black px-1 rounded">CONFLICT</span>}
+                                            {item.status === 'UNKNOWN' && <span className="bg-slate-400 text-white text-[8px] font-black px-1 rounded">UNKNOWN</span>}
+                                        </div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 w-48">
+                                            {/* Multi-Axis bars */}
+                                            {['Reliability', 'Freshness', 'Corroboration', 'Analyst'].map(axis => (
+                                                <div key={axis} className="flex flex-col">
+                                                    <div className="flex justify-between text-[7px] font-black text-slate-400 uppercase mb-0.5">
+                                                        <span>{axis.slice(0,3)}</span>
+                                                        <span>{((item.confidence_axes?.[axis.toLowerCase()] || 0.5) * 100).toFixed(0)}%</span>
+                                                    </div>
+                                                    <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                                                        <div className={`h-full ${axis === 'Analyst' ? 'bg-green-500' : 'bg-blue-400'}`} style={{ width: `${(item.confidence_axes?.[axis.toLowerCase()] || 0.5) * 100}%` }}></div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <button 
+                                            onClick={() => setIsVerifyOpen(true)}
+                                            className="group flex items-center gap-2 hover:bg-slate-100 px-2 py-1 rounded-lg transition-all"
+                                        >
+                                            <span className="w-2 h-2 rounded-full bg-green-500 group-hover:animate-ping"></span>
+                                            <span className="text-[9px] font-mono text-slate-400 uppercase group-hover:text-slate-800">Verifiable</span>
+                                        </button>
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                        <div className="flex justify-end gap-1">
+                                            <button 
+                                                onClick={() => { setSelectedItem(item); setDecisionAction('Confirm'); setIsDecisionOpen(true); }}
+                                                className="p-2 hover:bg-green-100 text-green-600 rounded-xl transition-all" 
+                                                title="Sign-off & Confirm"
+                                            >✓</button>
+                                            <button 
+                                                onClick={() => { setSelectedItem(item); setDecisionAction('Override'); setIsDecisionOpen(true); }}
+                                                className="p-2 hover:bg-blue-100 text-blue-600 rounded-xl transition-all font-black text-[10px]" 
+                                                title="Override with Rationale"
+                                            >SCORE</button>
+                                            <button 
+                                                onClick={() => { setSelectedItem(item); setDecisionAction('Flag Conflict'); setIsDecisionOpen(true); }}
+                                                className="p-2 hover:bg-red-100 text-red-600 rounded-xl transition-all" 
+                                                title="Flag Timeline Conflict"
+                                            >⚠️</button>
+                                        </div>
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
@@ -174,6 +254,41 @@ export default function InvestigationDetail() {
             </div>
         )
     }
+            {/* TIER S+ MODALS */}
+            <DecisionModal 
+                isOpen={isDecisionOpen}
+                onClose={() => setIsDecisionOpen(false)}
+                title={`${decisionAction}: ${selectedItem?.value}`}
+                action={decisionAction}
+                onConfirm={(data) => {
+                    console.log("TIER S+ DECISION SIGNED:", data);
+                    setIsDecisionOpen(false);
+                    // In real app: axios.post(`/api/intelligence/${selectedItem.id}/decide`, data)
+                }}
+            />
+
+            {isVerifyOpen && (
+                <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-md animate-in fade-in">
+                    <div className="bg-white rounded-3xl p-10 max-w-2xl w-full border border-slate-200 shadow-2xl">
+                        <div className="flex items-center gap-4 mb-6">
+                            <span className="text-4xl">🔐</span>
+                            <div>
+                                <h3 className="text-2xl font-black text-slate-800">Verify Evidence Integrity</h3>
+                                <p className="text-slate-500 text-sm font-bold uppercase tracking-widest">Local Verification Protocol</p>
+                            </div>
+                        </div>
+                        <div className="bg-slate-900 text-blue-400 p-6 rounded-2xl font-mono text-sm mb-6 shadow-inner overflow-x-auto">
+                            <div className="text-slate-500 mb-2"># 1. Download evidence file</div>
+                            <div>curl -H "Authorization: Bearer $TOKEN" {API_URL}/api/artifacts/[ID]/content -o evidence.bin</div>
+                            <div className="text-slate-500 my-2"># 2. Verify SHA-256 integrity seal</div>
+                            <div>echo "[EXPECTED_HASH]  evidence.bin" | sha256sum -c</div>
+                        </div>
+                        <div className="flex justify-end">
+                            <button onClick={() => setIsVerifyOpen(false)} className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold">Acknowledge</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
     );
 }

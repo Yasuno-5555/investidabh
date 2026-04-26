@@ -6,6 +6,8 @@ export const metadata: Metadata = {
     description: 'OSINT Investigation Platform',
 };
 
+import OpsecStatus from '../components/OpsecStatus';
+
 export default function RootLayout({
     children,
 }: {
@@ -13,7 +15,10 @@ export default function RootLayout({
 }) {
     return (
         <html lang="en">
-            <body>{children}</body>
+            <body className="pb-6">
+                {children}
+                <OpsecStatus />
+            </body>
         </html>
     );
 }

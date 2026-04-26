@@ -51,7 +51,10 @@ async def migrate():
                     'email', 'phone', 'subdomain', 'ip',
                     'url', 'hashtag', 'mastodon_account', 'github_user',
                     'github_repo', 'rss_article', 'company_product',
-                    'position_title', 'misc', 'certificate'
+                    'position_title', 'misc', 'certificate',
+                    'vulnerability', 'crypto_btc', 'crypto_eth', 'ip_address', 'domain', 'hash_sha256',
+                    'facility', 'product', 'event', 'entity',
+                    'asn', 'crypto', 'cve'
                 ]
                 await check_and_create_enum(cur, 'entity_type_enum', entity_types)
                 
@@ -71,40 +74,50 @@ async def migrate():
                 await add_column_if_not_exists(cur, 'intelligence', 'metadata', "JSONB DEFAULT '{}'::jsonb")
                 
                 # source_type
-                # Note: creating as text first or directly enum? enum is better.
-                # But if we use 'manual' as default, we need to cast.
                 await add_column_if_not_exists(cur, 'intelligence', 'source_type', "source_type_enum DEFAULT 'manual'")
 
-                # 3. Alter entity_type to use ENUM if it's currently text
-                # Check current type
+                # 3. UNIQUE Constraint for intelligence
+                try:
+                    await cur.execute("""
+                        ALTER TABLE intelligence 
+                        ADD CONSTRAINT uniq_intel_item UNIQUE (investigation_id, type, value);
+                    """)
+                    logger.info("[+] Added UNIQUE constraint to intelligence.")
+                except Exception as e:
+                    if "already exists" in str(e):
+                        logger.info("[-] UNIQUE constraint already exists.")
+                    else:
+                        logger.warning(f"[!] Could not add UNIQUE constraint: {e}")
+                
+                # 4. Alter type to use ENUM if it's currently text
+                # We use 'type' because that's what's in init.sql and nlp_analyzer.py
                 await cur.execute("""
                     SELECT data_type 
                     FROM information_schema.columns 
-                    WHERE table_name='intelligence' AND column_name='entity_type';
+                    WHERE table_name='intelligence' AND column_name='type';
                 """)
                 res = await cur.fetchone()
                 current_type = res[0] if res else None
                 
                 if current_type and current_type not in ('USER-DEFINED', 'entity_type_enum'):
-                    logger.info(f"[*] Converting entity_type from {current_type} to entity_type_enum...")
-                    # Sanitize data first: set anything not in ENUM to 'misc'
-                    # Construct a safe list for the query
+                    logger.info(f"[*] Converting column 'type' from {current_type} to entity_type_enum...")
+                    # Sanitize data first
                     safe_types = ", ".join([f"'{t}'" for t in entity_types])
                     await cur.execute(f"""
                         UPDATE intelligence 
-                        SET entity_type = 'misc' 
-                        WHERE entity_type NOT IN ({safe_types});
+                        SET type = 'misc' 
+                        WHERE type NOT IN ({safe_types});
                     """)
                     
                     # Alter type
                     await cur.execute("""
                         ALTER TABLE intelligence 
-                        ALTER COLUMN entity_type TYPE entity_type_enum 
-                        USING entity_type::entity_type_enum;
+                        ALTER COLUMN type TYPE entity_type_enum 
+                        USING type::entity_type_enum;
                     """)
-                    logger.info("[+] Converted entity_type to ENUM.")
+                    logger.info("[+] Converted column 'type' to ENUM.")
                 
-                # Phase 35: Evidence Integrity
+                # 5. Evidence Integrity
                 # 35.1: hash_sha256 for artifacts
                 await add_column_if_not_exists(cur, 'artifacts', 'hash_sha256', 'VARCHAR(64)')
 

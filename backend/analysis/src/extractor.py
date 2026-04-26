@@ -192,6 +192,68 @@ async def extract_and_save(investigation_id, target_url="", db_pool=None):
                         'confidence': 0.8
                     })
 
+            # CVE
+            cves = set(re.findall(r'\bCVE-\d{4}-\d{4,}\b', text))
+            for cve in cves:
+                extracted.append({
+                    'type': 'cve',
+                    'value': cve,
+                    'normalized': cve.upper(),
+                    'confidence': 1.0
+                })
+
+            # Crypto (BTC & ETH)
+            # BTC: Legacy/P2SH and Bech32
+            btc_addresses = set(re.findall(r'\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b|\bbc1[a-zA-HJ-NP-Z0-9]{25,39}\b', text))
+            for btc in btc_addresses:
+                extracted.append({
+                    'type': 'crypto',
+                    'value': btc,
+                    'normalized': f"btc:{btc}",
+                    'confidence': 0.9,
+                    'metadata': {'chain': 'btc'}
+                })
+            
+            # ETH
+            eth_addresses = set(re.findall(r'\b0x[a-fA-F0-9]{40}\b', text))
+            for eth in eth_addresses:
+                extracted.append({
+                    'type': 'crypto',
+                    'value': eth,
+                    'normalized': f"eth:{eth.lower()}",
+                    'confidence': 0.9,
+                    'metadata': {'chain': 'eth'}
+                })
+
+            # ASN
+            asns = set(re.findall(r'\bAS\d{2,}\b', text))
+            for asn in asns:
+                extracted.append({
+                    'type': 'asn',
+                    'value': asn,
+                    'normalized': asn.upper(),
+                    'confidence': 1.0
+                })
+
+            # Subdomains (if target_domain is known)
+            target_domain = None
+            if target_url:
+                parsed = urlparse(target_url)
+                target_domain = parsed.netloc.split(':')[0]
+            
+            if target_domain:
+                # Find subdomains in text that belong to target_domain
+                sub_pattern = r'\b[a-z0-9.-]+\.' + re.escape(target_domain) + r'\b'
+                found_subs = set(re.findall(sub_pattern, text.lower()))
+                for sub in found_subs:
+                    if sub != target_domain:
+                        extracted.append({
+                            'type': 'subdomain',
+                            'value': sub,
+                            'normalized': sub,
+                            'confidence': 0.8
+                        })
+
             # Page Title
             if soup.title and soup.title.string:
                  val = f"Title: {soup.title.string.strip()}"

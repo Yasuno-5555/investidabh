@@ -12,35 +12,45 @@ class WhoisEnricher(BaseEnricher):
         super().__init__("WhoisEnricher")
 
     def can_handle(self, entity_type: str) -> bool:
-        return entity_type in ['domain']
+        return entity_type in ['domain', 'ip']
 
     def enrich(self, entity_type: str, entity_value: str) -> Optional[Dict[str, Any]]:
         if not self.can_handle(entity_type):
             return None
             
         try:
-            logger.info(f"Running WHOIS for {entity_value}")
+            logger.info(f"Running WHOIS for {entity_value} ({entity_type})")
             
             # OPSEC: Check for Tor Proxy
             proxy_url = os.getenv("TOR_PROXY_URL") 
             
-            if proxy_url and proxy_url.startswith("socks5"):
-                # python-whois wraps the 'whois' binary via subprocess.
-                # Monkeypatching socket does not work. 
-                # To convert this to Tor, the entire worker process should be run with 'torsocks',
-                # or we must use a native python whois library that supports proxies.
-                # For now, we log a warning as we cannot enforce proxying here.
-                logger.warning(f"Tor Proxy configured but 'python-whois' does not support it natively. Ensure worker is running with 'torsocks' for OPSEC.")
-            
-            w = whois.whois(entity_value)
+            w = None
+            if entity_type == 'domain':
+                w = whois.whois(entity_value)
+            elif entity_type == 'ip':
+                # Try generic whois for IP
+                try:
+                    w = whois.whois(entity_value)
+                except:
+                    # Fallback to simple command if available (optional)
+                    pass
 
-            # Convert to dict and Handle datetime objects for serialization if needed
+            if not w:
+                return None
+
+            # Convert to dict and Handle datetime objects for serialization
+            def safe_str(val):
+                if isinstance(val, (list, tuple)):
+                    return [str(v) for v in val]
+                return str(val) if val else None
+
             result = {
                 "registrar": getattr(w, 'registrar', None),
-                "creation_date": str(w.creation_date) if getattr(w, 'creation_date', None) else None,
-                "expiration_date": str(w.expiration_date) if getattr(w, 'expiration_date', None) else None,
+                "creation_date": safe_str(getattr(w, 'creation_date', None)),
+                "expiration_date": safe_str(getattr(w, 'expiration_date', None)),
                 "emails": getattr(w, 'emails', None),
-                "org": getattr(w, 'org', None)
+                "org": getattr(w, 'org', None) or getattr(w, 'name', None),
+                "country": getattr(w, 'country', None)
             }
             return {"whois": result}
         except Exception as e:

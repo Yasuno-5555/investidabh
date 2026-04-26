@@ -7,10 +7,12 @@ from pathlib import Path
 try:
     import click
     import requests
+    import time
     from rich.console import Console
     from rich.table import Table
     from rich.panel import Panel
     from rich.markdown import Markdown
+    from rich.status import Status
 except ImportError as e:
     print(f"Error: Missing dependency '{e.name}'.")
     print("Please run: pip install -r cli/requirements.txt")
@@ -92,6 +94,22 @@ def auth():
     """Manage authentication"""
     pass
 
+@auth.command(name="register")
+@click.option("--username", prompt=True)
+@click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
+@click.pass_context
+def register(ctx, username, password):
+    """Register a new account"""
+    api_url = ctx.obj.get('API_URL')
+    try:
+        res = requests.post(f"{api_url}/api/auth/register", json={"username": username, "password": password})
+        if res.status_code in [200, 201]:
+            console.print("[green]Successfully registered![/green] You can now login.")
+        else:
+            handle_api_error(res)
+    except requests.exceptions.ConnectionError:
+        console.print(f"[bold red]Connection Error:[/bold red] Could not connect to {api_url}")
+
 @auth.command(name="login")
 @click.option("--username", prompt=True)
 @click.option("--password", prompt=True, hide_input=True)
@@ -113,16 +131,36 @@ def login(ctx, username, password):
         console.print(f"[bold red]Connection Error:[/bold red] Could not connect to {api_url}")
 
 @cli.command()
-@click.argument("url")
+@click.argument("url", required=False)
+@click.option("--wait", is_flag=True, help="Wait for the investigation to complete with a progress spinner")
 @click.pass_context
-def scan(ctx, url):
+def scan(ctx, url, wait):
     """Start a new investigation"""
+    if not url:
+        url = click.prompt("Please enter the target URL to scan")
+        
     console.print(f"[*] Starting investigation for {url}...")
     res = api_request(ctx, "POST", "/investigations", data={"targetUrl": url})
     
     if res.status_code == 200:
         data = res.json()
-        console.print(f"[green]Investigation queued![/green] ID: [bold]{data.get('id')}[/bold]")
+        inv_id = data.get('id')
+        console.print(f"[green]Investigation queued![/green] ID: [bold]{inv_id}[/bold]")
+        
+        if wait and inv_id:
+            with Status(f"[bold blue]Scanning {url}...[/bold blue]", spinner="dots") as status:
+                while True:
+                    status_res = api_request(ctx, "GET", f"/investigations/{inv_id}")
+                    if status_res.status_code == 200:
+                        status_data = status_res.json()
+                        inv_status = status_data.get('status')
+                        if inv_status == 'COMPLETED':
+                            console.print("[green]✔ Scan completed successfully![/green]")
+                            break
+                        elif inv_status == 'FAILED':
+                            console.print("[red]✖ Scan failed.[/red]")
+                            break
+                    time.sleep(3)
     else:
         handle_api_error(res)
 
@@ -156,10 +194,13 @@ def list_investigations(ctx):
         handle_api_error(res)
 
 @cli.command()
-@click.argument("id")
+@click.argument("id", required=False)
 @click.pass_context
 def show(ctx, id):
     """Show investigation details"""
+    if not id:
+        id = click.prompt("Please enter the investigation ID to show")
+        
     res = api_request(ctx, "GET", f"/investigations/{id}")
     
     if res.status_code == 200:
@@ -220,6 +261,105 @@ def search(ctx, query):
             console.print(table)
         except json.JSONDecodeError:
             handle_api_error(res)
+    else:
+        handle_api_error(res)
+
+@cli.command()
+@click.pass_context
+def graph(ctx):
+    """Get all entities and insights (Global Graph)"""
+    res = api_request(ctx, "GET", "/graph")
+    if res.status_code == 200:
+        data = res.json()
+        console.print(f"Graph Data: {len(data.get('nodes', []))} nodes, {len(data.get('edges', []))} edges")
+        if click.confirm("Do you want to save the graph data to graph.json?"):
+            with open("graph.json", "w") as f:
+                json.dump(data, f, indent=2)
+            console.print("[green]Saved to graph.json[/green]")
+    else:
+        handle_api_error(res)
+
+@cli.command()
+@click.argument("id")
+@click.pass_context
+def timeline(ctx, id):
+    """Get temporal event data for an investigation"""
+    res = api_request(ctx, "GET", f"/investigations/{id}/timeline")
+    if res.status_code == 200:
+        data = res.json()
+        if not data:
+            console.print("No timeline events found.")
+            return
+            
+        table = Table(title=f"Timeline for Investigation {id}")
+        table.add_column("Timestamp", style="cyan")
+        table.add_column("Event", style="white")
+        
+        for event in data:
+            table.add_row(event.get('timestamp', ''), event.get('description', ''))
+        console.print(table)
+    else:
+        handle_api_error(res)
+
+@cli.command()
+@click.argument("id")
+@click.pass_context
+def report(ctx, id):
+    """Generate and download PDF report"""
+    console.print(f"[*] Requesting report for investigation {id}...")
+    # NOTE: PDF responses are binary, handle appropriately
+    api_url = ctx.obj.get('API_URL')
+    token = get_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    
+    try:
+        res = requests.get(f"{api_url}/api/investigations/{id}/report", headers=headers)
+        if res.status_code == 200:
+            filename = f"report_{id}.pdf"
+            with open(filename, "wb") as f:
+                f.write(res.content)
+            console.print(f"[green]✔ Report saved as {filename}[/green]")
+        else:
+            handle_api_error(res)
+    except requests.exceptions.ConnectionError:
+        console.print(f"[bold red]Connection Error:[/bold red] Could not connect to {api_url}")
+
+@cli.command()
+@click.argument("id")
+@click.pass_context
+def audit(ctx, id):
+    """Get Chain of Custody logs"""
+    res = api_request(ctx, "GET", f"/investigations/{id}/audit")
+    if res.status_code == 200:
+        data = res.json()
+        if not data:
+            console.print("No audit logs found.")
+            return
+            
+        table = Table(title=f"Chain of Custody Logs - Investigation {id}")
+        table.add_column("Timestamp", style="cyan")
+        table.add_column("Action", style="magenta")
+        table.add_column("Actor", style="white")
+        
+        for log in data:
+            table.add_row(log.get('timestamp', ''), log.get('action', ''), log.get('actor', ''))
+        console.print(table)
+    else:
+        handle_api_error(res)
+
+@cli.command()
+@click.pass_context
+def verify(ctx):
+    """Run system-wide integrity check"""
+    console.print("[*] Running system-wide integrity check...")
+    res = api_request(ctx, "POST", "/admin/verify-integrity")
+    if res.status_code == 200:
+        data = res.json()
+        status = data.get('status')
+        if status == 'passed':
+            console.print("[green]✔ Integrity check passed![/green]")
+        else:
+            console.print(f"[bold red]✖ Integrity check failed![/bold red] Details: {data.get('details')}")
     else:
         handle_api_error(res)
 

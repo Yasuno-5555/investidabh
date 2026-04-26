@@ -61,15 +61,19 @@ class AdvancedNLP:
                         dst = sent_ents[j]
                         
                         label = "Related"
+                        confidence = 0.5
                         # Simple rule: PERSON + ORG = "Affiliated"
                         if (src.label_ == "PERSON" and dst.label_ == "ORG") or \
                            (src.label_ == "ORG" and dst.label_ == "PERSON"):
                             label = "Affiliated"
+                            confidence = 0.8
                         
                         relations.append({
                             "src": src.text,
                             "dst": dst.text,
-                            "label": label
+                            "label": label,
+                            "confidence": confidence,
+                            "evidence": sent.text.strip()
                         })
 
             for ent in sent_ents:
