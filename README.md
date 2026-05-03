@@ -14,7 +14,7 @@
 |--------|-------------|
 | **Web Scraping** | Playwright-based HTML/Screenshot preservation |
 | **Network Recon** | WHOIS, DNS (A, MX, TXT) automated lookups |
-| **Enrichment** | Integration with HIBP, GitHub, etc. |
+| **GeoIP Enrichment** | **[NEW]** Automated location (Flag, Country, City) and ISP info for IPs via ip-api.com |
 | **RSS / Social** | Automated news & social media monitoring |
 | **Wayback Machine** | Historical snapshot analysis ("Ghost Entities") |
 
@@ -23,17 +23,19 @@
 - **TTP Mapping**: Automated mapping to MITRE ATT&CK IDs
 - **Sentiment & Relations**: NLP-based relationship extraction
 - **Threat Detection**: Watchlist matching & Anomaly detection
+- **Automated Alerts**: **[NEW]** Webhook notifications (Slack/Discord) for High Priority threats
 - **Integrity Verification**: SHA-256 Hashing & Automated tamper detection
 
 ### 🎯 Analyst Workbench
-- **Graph Visualization**: Interactive, force-directed graph with TTP styling
+- **Graph Visualization**: Interactive, force-directed graph with TTP styling and **GeoIP Badges**
 - **Timeline Intelligence**: Temporal analysis of events & entities
 - **Hypothesis Mode**: "What-if" analysis with shadow nodes/edges
 - **Chain of Custody**: Immutable audit logs for all actions
-- **Reporting**: One-click PDF Intelligence Reports
+- **Reporting**: PDF Intelligence Reports & **[NEW] STIX 2.1 JSON Export**
 
 ### 💻 Command Line Interface (CLI)
 - **Headless Operation**: Full feature parity with GUI.
+- **Real-time Monitoring**: **[NEW]** `alerts stream` command for live threat notifications.
 - **Automation**: Scriptable `scan`, `list`, and `search` commands.
 - **Rich Output**: Formatted tables and JSON output for integration.
 
@@ -77,7 +79,7 @@
 |---------|-------|---------|
 | **Gateway** | Node.js + Fastify | API, Auth (JWT), Search, PDF generation |
 | **Collector** | Python + Playwright | Web scraping, evidence preservation |
-| **Analysis** | Python + spaCy | NLP, entity extraction, indexing |
+| **Analysis** | Python + spaCy | NLP, entity extraction, GeoIP enrichment, Scoring |
 | **Frontend** | Next.js + React Flow | Dashboard, graph visualization |
 | **CLI** | Python + Click | Terminal-based management & automation |
 
@@ -102,12 +104,13 @@
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/investidubh.git
+git clone https://github.com/Yasuno-5555/investidabh.git
 cd investidubh
 
 # Configure environment
 cp .env.example .env
-# Edit .env as needed
+# Edit .env as needed. 
+# Set ALERT_WEBHOOK_URL for Slack/Discord notifications.
 
 # Start all services
 docker-compose up -d --build
@@ -121,44 +124,11 @@ open http://localhost:3000
 # Install CLI dependencies
 pip install -r cli/requirements.txt
 
-# Authenticate
+# Authenticate (Default API URL is http://localhost:4001)
 python3 cli/investidubh_cli.py auth login --username admin --password secret
 
 # Verify
 python3 cli/investidubh_cli.py list
-```
-
-### First Run
-1. Register a new account at `http://localhost:3000/register` (or use CLI)
-2. Create your first investigation
-3. Enter target URL and start collection
-4. View extracted entities in the Graph tab
-
----
-
-## 🛠 Operations
-
-### View Logs
-```bash
-docker-compose logs -f gateway
-docker-compose logs -f collector
-docker-compose logs -f analysis
-```
-
-### Reset Database
-```bash
-docker-compose down -v
-docker-compose up -d
-```
-
-### Rebuild Services
-```bash
-docker-compose up -d --build --force-recreate
-```
-
-### Run Database Migration
-```bash
-docker-compose exec analysis python src/migrate_db.py
 ```
 
 ---
@@ -177,6 +147,7 @@ docker-compose exec analysis python src/migrate_db.py
 | GET | `/api/investigations` | List investigations |
 | POST | `/api/investigations` | Create investigation |
 | GET | `/api/investigations/:id` | Get investigation details |
+| GET | `/api/investigations/:id/stix` | **[NEW]** Export as STIX 2.1 JSON |
 | GET | `/api/search` | Search investigations & artifacts |
 
 ### Graph & Intelligence
@@ -205,7 +176,7 @@ docker-compose exec analysis python src/migrate_db.py
 - **Authentication**: JWT-based with bcrypt password hashing
 - **Authorization**: User-scoped data isolation
 - **OPSEC**: Optional Tor integration for collection
-- **Deployment**: Designed for local/VPN use; add HTTPS for public exposure
+- **Deployment**: API runs on port **4001** to avoid local conflicts.
 
 ---
 
@@ -216,7 +187,7 @@ investidubh/
 ├── backend/
 │   ├── gateway/         # API server (TypeScript)
 │   ├── collector/       # Web scraper (Python)
-│   └── analysis/        # NLP engine (Python)
+│   └── analysis/        # NLP engine & enrichment (Python)
 ├── frontend/            # Next.js dashboard
 ├── cli/                 # CLI Tool (Python)
 ├── packages/
@@ -250,6 +221,7 @@ MIT License — See [LICENSE](LICENSE) for details.
 
 Built with:
 - [spaCy](https://spacy.io/) — NLP
+- [ip-api.com](https://ip-api.com/) — Free GeoIP
 - [Playwright](https://playwright.dev/) — Browser automation
 - [React Flow](https://reactflow.dev/) — Graph visualization
 - [WeasyPrint](https://weasyprint.org/) — PDF generation

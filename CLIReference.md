@@ -6,7 +6,7 @@
 
 これらのオプションは、すべてのコマンドで使用できます。
 
-- `--api-url <URL>`: Investidubh APIのエンドポイントを指定します。デフォルトは `http://localhost:4000` です。環境変数 `API_URL` でも設定可能です。
+- `--api-url <URL>`: Investidubh APIのエンドポイントを指定します。デフォルトは `http://localhost:4001` です。環境変数 `API_URL` でも設定可能です。
 
 ---
 
@@ -120,6 +120,41 @@
 - **使用例:**
   ```bash
   python3 cli/investidubh_cli.py search entity "example@example.com"
+  ```
+
+---
+
+### `entity`
+
+エンティティの管理を行います。
+
+#### `entity update`
+
+特定のエンティティのメタデータを更新します。
+
+- **引数:**
+  - `TYPE`: エンティティの種類（例: `ip_address`, `domain`）。
+  - `VALUE`: エンティティの値（例: `8.8.8.8`）。
+- **オプション:**
+  - `--metadata`: 更新するメタデータのJSON文字列（必須）。
+- **使用例:**
+  ```bash
+  python3 cli/investidubh_cli.py entity update ip_address 8.8.8.8 --metadata '{"note": "Known malicious"}'
+  ```
+
+---
+
+### `alerts`
+
+リアルタイムアラートの監視を行います。
+
+#### `alerts stream`
+
+プラットフォームから送信されるリアルタイムアラートをストリーミング表示します。
+
+- **使用例:**
+  ```bash
+  python3 cli/investidubh_cli.py alerts stream
   ```
 
 ---
