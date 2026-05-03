@@ -26,8 +26,9 @@ export default function LoginPage() {
                 alert('Registered! Please login.');
                 setIsRegister(false);
             }
-        } catch (err) {
-            alert('Authentication failed');
+        } catch (err: any) {
+            const errorMsg = err.response?.data?.message || err.response?.data || 'Authentication failed. Please try again.';
+            alert(`Error: ${errorMsg}`);
         }
     };
 

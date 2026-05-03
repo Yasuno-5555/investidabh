@@ -1,4 +1,5 @@
 click
 requests
 rich
+sseclient-py
 tabulate

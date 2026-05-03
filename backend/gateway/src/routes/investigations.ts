@@ -1,10 +1,12 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { Pool } from 'pg';
-import Redis from 'ioredis';
+import pg from 'pg';
+const { Pool } = pg;
+import RedisModule from 'ioredis';
+type Redis = any; // Simplify typing for now to pass build
 import { v4 as uuidv4 } from 'uuid';
 import { CreateInvestigationSchema, CollectorTask } from '@investidubh/ts-types';
 
-export default async function investigationRoutes(app: FastifyInstance, options: { pool: Pool, redis: Redis }) {
+export default async function investigationRoutes(app: FastifyInstance, options: { pool: any, redis: any }) {
     const { pool, redis } = options;
 
     app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {

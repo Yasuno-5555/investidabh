@@ -2,20 +2,22 @@ import fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import { createLogger } from '@investidubh/logger';
-import Redis from 'ioredis';
-import { Pool } from 'pg';
-import authRoutes from './routes/auth';
-import investigationRoutes from './routes/investigations';
-import searchRoutes from './routes/search';
+import RedisModule from 'ioredis';
+const Redis = (RedisModule as any).default || RedisModule;
+import pg from 'pg';
+const { Pool } = pg;
+import authRoutes from './routes/auth.js';
+import investigationRoutes from './routes/investigations.js';
+import searchRoutes from './routes/search.js';
 
-export function buildApp(): FastifyInstance {
+export function buildApp() {
     const logger = createLogger('gateway');
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
     const app = fastify({
         logger: logger as any,
-        disableRequestLogging: true
+        disableRequestLogging: false
     });
 
     app.register(cors, { origin: '*' });
@@ -35,5 +37,5 @@ export function buildApp(): FastifyInstance {
     app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
     app.get('/api/health', async () => ({ status: 'ok', scope: 'api' }));
 
-    return app;
+    return { app, redis, pool };
 }

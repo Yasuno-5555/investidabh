@@ -65,7 +65,7 @@ services:
       context: .
       dockerfile: backend/gateway/Dockerfile
     ports:
-      - "4000:4000"
+      - "4001:4000"
     environment:
       - DATABASE_URL=postgresql://${DB_USER:-investidubh}:${DB_PASSWORD:-secret}@postgres:5432/investidubh_core
       - REDIS_URL=redis://redis:6379
@@ -141,11 +141,15 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+      - ./packages:/app/packages
     ports:
       - "3000:3000"
     environment:
       - API_URL=http://gateway:4000
-      - NEXT_PUBLIC_API_URL=http://localhost:4000 # Browser access
+      - NEXT_PUBLIC_API_URL=http://localhost:4001 # Browser access
     depends_on:
       gateway:
         condition: service_started

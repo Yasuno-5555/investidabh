@@ -13,6 +13,7 @@ try:
     from rich.panel import Panel
     from rich.markdown import Markdown
     from rich.status import Status
+    import sseclient
 except ImportError as e:
     print(f"Error: Missing dependency '{e.name}'.")
     print("Please run: pip install -r cli/requirements.txt")
@@ -234,10 +235,16 @@ def show(ctx, id):
     else:
         handle_api_error(res)
 
-@cli.command()
+@cli.group()
+@click.pass_context
+def search(ctx):
+    """Search for indicators, entities, or investigations."""
+    pass
+
+@search.command(name="investigations")
 @click.argument("query")
 @click.pass_context
-def search(ctx, query):
+def search_investigations(ctx, query):
     """Search investigations and artifacts"""
     res = api_request(ctx, "GET", "/search", params={"q": query})
     if res.status_code == 200:
@@ -263,6 +270,96 @@ def search(ctx, query):
             handle_api_error(res)
     else:
         handle_api_error(res)
+
+@search.command(name="indicator")
+@click.argument("query")
+@click.pass_context
+def search_indicator(ctx, query):
+    """Search for a specific indicator (IP, domain, hash, etc.)"""
+    res = api_request(ctx, "GET", f"/search/indicators", params={"q": query})
+    if res.status_code == 200:
+        try:
+            results = res.json()
+            if not results:
+                console.print("No results found.")
+                return
+
+            table = Table(title=f"Indicator Search Results: '{query}'")
+            table.add_column("Type", style="cyan")
+            table.add_column("Value", style="magenta")
+            table.add_column("First Seen", style="green")
+            table.add_column("Last Seen", style="green")
+            
+            for item in results:
+                table.add_row(
+                    item.get('type', 'N/A'),
+                    item.get('value', 'N/A'),
+                    item.get('first_seen', 'N/A'),
+                    item.get('last_seen', 'N/A')
+                )
+            console.print(table)
+        except json.JSONDecodeError:
+            handle_api_error(res)
+    else:
+        handle_api_error(res)
+
+@search.command(name="entity")
+@click.argument("query")
+@click.pass_context
+def search_entity(ctx, query):
+    """Search for a specific entity (e.g., email, name, company)"""
+    res = api_request(ctx, "GET", f"/api/search/entities", params={"q": query})
+    if res.status_code == 200:
+        try:
+            results = res.json()
+            if not results:
+                console.print("No results found.")
+                return
+
+            table = Table(title=f"Entity Search Results: '{query}'")
+            table.add_column("Type", style="cyan")
+            table.add_column("Value", style="magenta")
+            table.add_column("Related Investigation", style="blue")
+            
+            for item in results:
+                table.add_row(
+                    item.get('type', 'N/A'),
+                    item.get('value', 'N/A'),
+                    item.get('investigation_id', 'N/A')
+                )
+            console.print(table)
+        except json.JSONDecodeError:
+            handle_api_error(res)
+    else:
+        handle_api_error(res)
+
+@cli.group()
+@click.pass_context
+def entity(ctx):
+    """Manage entities."""
+    pass
+
+@entity.command(name="update")
+@click.argument("type")
+@click.argument("value")
+@click.option("--metadata", required=True, help='JSON string of metadata to update. E.g., \'{"description": "New description"}\'')
+@click.pass_context
+def update_entity(ctx, type, value, metadata):
+    """Update an entity's metadata."""
+    try:
+        metadata_json = json.loads(metadata)
+    except json.JSONDecodeError:
+        console.print("[bold red]Error:[/bold red] Invalid JSON format for metadata.")
+        return
+
+    endpoint = f"/entities/{type}/{value}"
+    res = api_request(ctx, "PATCH", endpoint, data=metadata_json)
+
+    if res.status_code == 200:
+        console.print(f"[green]Successfully updated entity {type}: {value}[/green]")
+    else:
+        handle_api_error(res)
+
 
 @cli.command()
 @click.pass_context
@@ -362,6 +459,53 @@ def verify(ctx):
             console.print(f"[bold red]✖ Integrity check failed![/bold red] Details: {data.get('details')}")
     else:
         handle_api_error(res)
+
+@cli.group()
+def alerts():
+    """Manage and view real-time alerts."""
+    pass
+
+@alerts.command(name="stream")
+@click.pass_context
+def stream_alerts(ctx):
+    """Stream real-time alerts from the platform."""
+    api_url = ctx.obj.get('API_URL')
+    token = get_token()
+    if not token:
+        console.print("[bold red]Error:[/bold red] You must be logged in to stream alerts. Please run 'auth login'.")
+        return
+
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{api_url}/api/alerts/stream"
+
+    console.print(f"[*] Connecting to alert stream at {url}...")
+    
+    try:
+        response = requests.get(url, headers=headers, stream=True)
+        response.raise_for_status() 
+        client = sseclient.SSEClient(response)
+
+        console.print("[green]✔ Connected.[/green] Waiting for alerts...")
+        for event in client.events():
+            try:
+                alert_data = json.loads(event.data)
+                panel_content = (
+                    f"[bold]Type:[/bold] {alert_data.get('type', 'N/A')}\n"
+                    f"[bold]Message:[/bold] {alert_data.get('message', 'N/A')}\n"
+                    f"[bold]Timestamp:[/bold] {alert_data.get('timestamp', 'N/A')}"
+                )
+                console.print(Panel(panel_content, title="[bold magenta]New Alert[/bold magenta]", expand=False))
+            except json.JSONDecodeError:
+                console.print(f"[yellow]Received non-JSON event data: {event.data}[/yellow]")
+
+    except requests.exceptions.HTTPError as e:
+        console.print(f"[bold red]HTTP Error:[/bold red] Could not connect to stream. Status code: {e.response.status_code}")
+    except requests.exceptions.ConnectionError:
+        console.print(f"[bold red]Connection Error:[/bold red] Could not connect to {api_url}")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stream disconnected by user.[/yellow]")
+    except Exception as e:
+        console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
 
 if __name__ == '__main__':
     cli()

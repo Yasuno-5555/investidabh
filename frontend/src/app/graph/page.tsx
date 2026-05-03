@@ -301,7 +301,17 @@ export default function GraphPage() {
                     )}
 
                     {/* Top Right Controls */}
-                    <Panel position="top-right" className="flex flex-col gap-2 max-w-xs">
+                    <Panel position="top-right" className="flex flex-col gap-2 max-w-xs mr-4 mt-4">
+                        <button
+                            onClick={() => setIsHypothesisMode(!isHypothesisMode)}
+                            className={`px-4 py-2 rounded-lg font-bold shadow-lg transition-all ${isHypothesisMode
+                                ? 'bg-purple-600 text-white ring-2 ring-purple-400 ring-offset-2'
+                                : 'bg-white text-slate-600 hover:bg-slate-50 border'
+                                }`}
+                        >
+                            {isHypothesisMode ? '🔮 Exit Hypothesis' : '🔮 Hypothesis Mode'}
+                        </button>
+                        
                         <div className="flex gap-2">
                             <button
                                 onClick={() => fetchData()}
@@ -788,18 +798,6 @@ export default function GraphPage() {
                             </div>
                         </Panel>
                     )}
-
-                    <Panel position="top-right" className="mr-4 mt-4">
-                        <button
-                            onClick={() => setIsHypothesisMode(!isHypothesisMode)}
-                            className={`px-4 py-2 rounded-lg font-bold shadow-lg transition-all ${isHypothesisMode
-                                ? 'bg-purple-600 text-white ring-2 ring-purple-400 ring-offset-2'
-                                : 'bg-white text-slate-600 hover:bg-slate-50'
-                                }`}
-                        >
-                            {isHypothesisMode ? '🔮 Exit Hypothesis' : '🔮 Hypothesis Mode'}
-                        </button>
-                    </Panel>
 
                     {/* Phase 32: Alert Ticker */}
                     <AlertTicker />

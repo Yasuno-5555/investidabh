@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation';
 import Navbar from '../components/Navbar';
 import Spinner from '../components/Spinner';
 import { Toaster, toast } from 'react-hot-toast';
+import DOMPurify from 'dompurify';
 
 const fetcher = (url: string) => {
     const token = localStorage.getItem('token');
@@ -23,7 +24,6 @@ export default function Home() {
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<any[]>([]);
-    const [showAdvanced, setShowAdvanced] = useState(false);
     const [modules, setModules] = useState({
         dns: true,
         whois: true,
@@ -110,7 +110,7 @@ export default function Home() {
             router.push('/login');
             return null;
         }
-        return <div>Failed to load</div>;
+        return null;
     }
 
     return (
@@ -215,18 +215,14 @@ export default function Home() {
                             <div className="px-4 py-2 bg-slate-50 border-b text-xs font-bold text-slate-500">RESULTS</div>
                             <div className="max-h-96 overflow-y-auto">
                                 {searchResults.map((hit: any) => (
-import DOMPurify from 'dompurify';
-
-                                // ... (inside the component)
-
-                                <Link key={hit.id} href={`/investigations/${hit.id}`} className="block p-4 hover:bg-blue-50 border-b last:border-0 transition-colors">
-                                    <div className="font-semibold text-blue-600 mb-1">{hit.url}</div>
-                                    <div className="text-sm text-slate-600 line-clamp-2"
-                                        dangerouslySetInnerHTML={{
-                                            __html: DOMPurify.sanitize(hit.snippet)
-                                        }}
-                                    />
-                                </Link>
+                                    <Link key={hit.id} href={`/investigations/${hit.id}`} className="block p-4 hover:bg-blue-50 border-b last:border-0 transition-colors">
+                                        <div className="font-semibold text-blue-600 mb-1">{hit.url}</div>
+                                        <div className="text-sm text-slate-600 line-clamp-2"
+                                            dangerouslySetInnerHTML={{
+                                                __html: DOMPurify.sanitize(hit.snippet)
+                                            }}
+                                        />
+                                    </Link>
                                 ))}
                             </div>
                         </div>
@@ -264,7 +260,7 @@ import DOMPurify from 'dompurify';
                     ))}
                     {!investigations && (
                         [1, 2, 3].map(i => (
-                            <div key={i} className="h-32 bg-slate-100 rounded-xl animate-pulse"></div>
+                            <div key={i} className="h-32 bg-slate-100 rounded-xl animate-pulse" />
                         ))
                     )}
                 </div>

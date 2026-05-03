@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { Pool } from 'pg';
+import pg from 'pg';
+const { Pool } = pg;
 import { z } from 'zod';
 
 const CredentialsSchema = z.object({
@@ -8,7 +9,7 @@ const CredentialsSchema = z.object({
     password: z.string().min(6).max(100)
 });
 
-export default async function authRoutes(app: FastifyInstance, options: { pool: Pool }) {
+export default async function authRoutes(app: FastifyInstance, options: { pool: any }) {
     const { pool } = options;
 
     app.post('/register', async (request, reply) => {
@@ -27,7 +28,7 @@ export default async function authRoutes(app: FastifyInstance, options: { pool: 
             );
             return res.rows[0];
         } catch (err) {
-            return reply.status(409).send("Username already exists");
+            return reply.status(409).send({ message: "Username already exists" });
         }
     });
 
